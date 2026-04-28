@@ -4,7 +4,6 @@ const redis = new Redis(process.env.REDIS_URL, {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
   retryStrategy: (times) => Math.min(times * 500, 5000),
-  tls: process.env.REDIS_URL?.startsWith('rediss://') ? {} : undefined,
 });
 
 redis.on('connect', () => console.log('[Redis] Connected'));
