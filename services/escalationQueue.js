@@ -1,5 +1,6 @@
 const { Queue } = require('bullmq');
 const redis = require('../config/redis');
+const { ESCALATION_LIMITS, HOD_EMAIL_DELAY } = require('../config/escalationLimits');
 
 const escalationQueue = new Queue('escalation', {
   connection: redis,
@@ -12,21 +13,6 @@ const escalationQueue = new Queue('escalation', {
 });
 
 async function scheduleEscalation(complaintId, category, startTime) {
-const ESCALATION_LIMITS = {
-  cleaning: 1 * 60 * 1000,
-  housekeeping: 1 * 60 * 1000,
-  washroom: 1 * 60 * 1000,
-  electrical: 1 * 60 * 1000,
-  plumbing: 1 * 60 * 1000,
-  civil: 1 * 60 * 1000,
-  carpentry: 1 * 60 * 1000,
-  technician: 1 * 60 * 1000,
-  'it / technical': 1 * 60 * 1000,
-  lab: 1 * 60 * 1000,
-  safety: 1 * 60 * 1000,
-  others: 1 * 60 * 1000,
-};
-
   const limit = ESCALATION_LIMITS[category?.toLowerCase()];
   if (!limit) return;
 
@@ -43,11 +29,10 @@ const ESCALATION_LIMITS = {
 }
 
 async function scheduleHodEmail(complaintId) {
- const HOD_DELAY = 20 * 1000;
   await escalationQueue.add(
     'hod-email',
     { complaintId },
-    { delay: HOD_DELAY, jobId: `hod-${complaintId}-${Date.now()}`, removeOnComplete: true }
+    { delay: HOD_EMAIL_DELAY, jobId: `hod-${complaintId}-${Date.now()}`, removeOnComplete: true }
   );
 }
 
