@@ -12,20 +12,20 @@ const escalationQueue = new Queue('escalation', {
 });
 
 async function scheduleEscalation(complaintId, category, startTime) {
-  const ESCALATION_LIMITS = {
-    cleaning: 1 * 60 * 60 * 1000,
-    housekeeping: 1 * 60 * 60 * 1000,
-    washroom: 1 * 60 * 60 * 1000,
-    electrical: 24 * 60 * 60 * 1000,
-    plumbing: 24 * 60 * 60 * 1000,
-    civil: 24 * 60 * 60 * 1000,
-    carpentry: 24 * 60 * 60 * 1000,
-    technician: 2 * 60 * 60 * 1000,
-    'it / technical': 2 * 60 * 60 * 1000,
-    lab: 2 * 60 * 60 * 1000,
-    safety: 2 * 60 * 60 * 1000,
-    others: 2 * 60 * 60 * 1000,
-  };
+const ESCALATION_LIMITS = {
+  cleaning: 1 * 60 * 1000,
+  housekeeping: 1 * 60 * 1000,
+  washroom: 1 * 60 * 1000,
+  electrical: 1 * 60 * 1000,
+  plumbing: 1 * 60 * 1000,
+  civil: 1 * 60 * 1000,
+  carpentry: 1 * 60 * 1000,
+  technician: 1 * 60 * 1000,
+  'it / technical': 1 * 60 * 1000,
+  lab: 1 * 60 * 1000,
+  safety: 1 * 60 * 1000,
+  others: 1 * 60 * 1000,
+};
 
   const limit = ESCALATION_LIMITS[category?.toLowerCase()];
   if (!limit) return;
@@ -43,7 +43,7 @@ async function scheduleEscalation(complaintId, category, startTime) {
 }
 
 async function scheduleHodEmail(complaintId) {
-  const HOD_DELAY = 20 * 60 * 1000;
+ const HOD_DELAY = 20 * 1000;
   await escalationQueue.add(
     'hod-email',
     { complaintId },
