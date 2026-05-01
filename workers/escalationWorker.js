@@ -80,4 +80,4 @@ worker.on('failed', (job, err) => logger.error(`[Worker] Job ${job.id} failed: $
 worker.on('error', (err) => logger.error(`[Worker] Worker error: ${err.message}`));
 worker.on('active', (job) => logger.info(`[Worker] Job active: ${job.id} - ${job.name}`));
 
-module.exports = worker;
+module.exports = worker;  
