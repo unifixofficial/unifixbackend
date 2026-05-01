@@ -1,6 +1,6 @@
 const admin = require('../config/firebase');
 const { sendSuccess, sendError } = require('../utils/response');
-const { getTransporter } = require('../config/nodemailer');
+const { getResend } = require('../config/nodemailer');
 const logger = require('../services/logger');
 const { ESCALATION_LIMITS, NO_ACCEPTANCE_LIMITS, HOD_EMAIL_DELAY } = require('../config/escalationLimits');
 
@@ -38,14 +38,14 @@ function toDate(val) {
 }
 
 async function sendEscalationHODEmail(complaint) {
-  const transporter = getTransporter();
+  const resend = getResend();
   const acceptedAt = toDate(complaint.acceptedAt);
   const flaggedAt = toDate(complaint.flaggedAt);
   const createdAt = toDate(complaint.createdAt);
   const elapsed = formatElapsed(Date.now() - (acceptedAt ? acceptedAt.getTime() : createdAt ? createdAt.getTime() : Date.now()));
 
   await transporter.sendMail({
-    from: `"UNIFIX" <${process.env.EMAIL_USER}>`,
+    from: 'UNIFIX <onboarding@resend.dev>',
     to: process.env.HOD_EMAIL,
 subject: `UNIFIX: Unresolved Complaint – ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`,    html: `
 <!DOCTYPE html>
@@ -124,15 +124,15 @@ subject: `UNIFIX: Unresolved Complaint – ${capitalize(complaint.category)} Iss
 }
 
 async function sendHODResolutionEmail(complaint, resolvedBy) {
-  const transporter = getTransporter();
+  const resend = getResend();
   const createdAt = toDate(complaint.createdAt);
   const flaggedAt = toDate(complaint.flaggedAt);
   const resolvedAt = toDate(complaint.flagResolvedAt) || new Date();
 
   await transporter.sendMail({
-    from: `"UNIFIX" <${process.env.EMAIL_USER}>`,
+   from: 'UNIFIX <onboarding@resend.dev>',
     to: process.env.HOD_EMAIL,
-subject: `UNIFIX: Complaint Resolved – ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`,    html: `
+subject: `UNIFIX: Complaint Resolved - ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`,    html: `
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">

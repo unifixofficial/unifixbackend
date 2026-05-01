@@ -1,4 +1,4 @@
-const { getTransporter } = require('../config/nodemailer');
+const { getResend } = require('../config/nodemailer');
 
 async function sendOTPEmail(email, otp, fullName, type) {
   const otpType = type || 'email-verification';
@@ -47,9 +47,9 @@ async function sendOTPEmail(email, otp, fullName, type) {
     throw new Error('Invalid OTP type');
   }
 
-  const transporter = getTransporter();
-  await transporter.sendMail({
-    from: `"UNIFIX" <${process.env.EMAIL_USER}>`,
+const resend = getResend();
+  await resend.emails.send({
+    from: 'UNIFIX <onboarding@resend.dev>',
     to: email,
     subject,
     html: htmlContent,
@@ -59,9 +59,9 @@ async function sendOTPEmail(email, otp, fullName, type) {
 async function sendRejectionEmail(email, fullName, rejectionMessage) {
   if (!email || !rejectionMessage) throw new Error('Email and rejection message are required');
   const name = fullName || 'User';
-  const transporter = getTransporter();
-  await transporter.sendMail({
-    from: `"UNIFIX" <${process.env.EMAIL_USER}>`,
+const resend = getResend();
+  await resend.emails.send({
+    from: 'UNIFIX <onboarding@resend.dev>',
     to: email,
     subject: 'UNIFIX - Profile Verification Update',
     html: `
@@ -86,9 +86,9 @@ async function sendRejectionEmail(email, fullName, rejectionMessage) {
 async function sendApprovalEmail(email, fullName) {
   if (!email) throw new Error('Email is required');
   const name = fullName || 'User';
-  const transporter = getTransporter();
-  await transporter.sendMail({
-    from: `"UNIFIX" <${process.env.EMAIL_USER}>`,
+const resend = getResend();
+  await resend.emails.send({
+    from: 'UNIFIX <onboarding@resend.dev>',
     to: email,
     subject: 'UNIFIX - Account Approved!',
     html: `
@@ -113,9 +113,9 @@ async function sendApprovalEmail(email, fullName) {
 async function sendIdCardRejectionEmail(email, fullName, reason) {
   if (!email) throw new Error('Email is required');
   const name = fullName || 'User';
-  const transporter = getTransporter();
-  await transporter.sendMail({
-    from: `"UNIFIX" <${process.env.EMAIL_USER}>`,
+const resend = getResend();
+  await resend.emails.send({
+    from: 'UNIFIX <onboarding@resend.dev>',
     to: email,
     subject: 'UNIFIX - ID Card Update Request Rejected',
     html: `
@@ -140,7 +140,7 @@ async function sendIdCardRejectionEmail(email, fullName, reason) {
 }
 
 async function sendRaggingReportEmail(hodEmail, report) {
-  const transporter = getTransporter();
+ const resend = getResend();
 
   const reporterRows = report.isAnonymous
     ? `
@@ -208,8 +208,8 @@ async function sendRaggingReportEmail(hodEmail, report) {
         </td>
       </tr>`;
 
-  await transporter.sendMail({
-    from: `"UNIFIX" <${process.env.EMAIL_USER}>`,
+ await resend.emails.send({
+    from: 'UNIFIX <onboarding@resend.dev>',
     to: hodEmail,
     subject: `UNIFIX — Ragging Report Received | Immediate Action Required`,
     html: `
