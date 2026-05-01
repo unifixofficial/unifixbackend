@@ -51,8 +51,8 @@ const notifyStaffMember = async (staffUid, title, body, data) => {
 
 const submit = async (req, res) => {
   try {
-    const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-    if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
+    // const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
+    // if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
 
     const { category, subIssue, customIssue, description, building, roomDetail, photoUrl } = req.body;
     const uid = req.user.uid;
@@ -161,8 +161,8 @@ const docRef = await admin.firestore().collection('complaints').add(complaintDat
 
 const accept = async (req, res) => {
   try {
-    const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-    if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
+    // const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
+    // if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
 
     const { complaintId } = req.body;
     const uid = req.user.uid;
@@ -225,8 +225,8 @@ await complaintRef.update({
 
 const updateStatus = async (req, res) => {
   try {
-    const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-    if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
+    // const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
+    // if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
 
     const { complaintId, status } = req.body;
     const uid = req.user.uid;
@@ -336,8 +336,8 @@ if (status === 'completed') {
 
 const reject = async (req, res) => {
   try {
-    const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-    if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
+    // const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
+    // if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
 
     const { complaintId, reason } = req.body;
     if (!complaintId || !reason) return sendError(res, 'complaintId and reason are required.', 400);
