@@ -1,4 +1,18 @@
-const { getResend } = require('../config/nodemailer');
+const SibApiV3Sdk = require('sib-api-v3-sdk');
+const getBrevoClient = () => {
+  const client = SibApiV3Sdk.ApiClient.instance;
+  client.authentications['api-key'].apiKey = process.env.BREVO_API_KEY;
+  return new SibApiV3Sdk.TransactionalEmailsApi();
+};
+const sendBrevoEmail = async (to, subject, htmlContent) => {
+  const api = getBrevoClient();
+  await api.sendTransacEmail({
+    sender: { name: 'UNIFIX', email: process.env.BREVO_SENDER_EMAIL },
+    to: [{ email: to }],
+    subject,
+    htmlContent,
+  });
+};
 
 async function sendOTPEmail(email, otp, fullName, type) {
   const otpType = type || 'email-verification';
@@ -47,24 +61,13 @@ async function sendOTPEmail(email, otp, fullName, type) {
     throw new Error('Invalid OTP type');
   }
 
-const resend = getResend();
-  await resend.emails.send({
-    from: 'UNIFIX <onboarding@resend.dev>',
-    to: email,
-    subject,
-    html: htmlContent,
-  });
+await sendBrevoEmail(email, subject, htmlContent);
 }
 
 async function sendRejectionEmail(email, fullName, rejectionMessage) {
   if (!email || !rejectionMessage) throw new Error('Email and rejection message are required');
-  const name = fullName || 'User';
-const resend = getResend();
-  await resend.emails.send({
-    from: 'UNIFIX <onboarding@resend.dev>',
-    to: email,
-    subject: 'UNIFIX - Profile Verification Update',
-    html: `
+ const name = fullName || 'User';
+  await sendBrevoEmail(email, 'UNIFIX - Profile Verification Update', `
       <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;background:#f9fafb;padding:20px;border-radius:8px;">
         <div style="text-align:center;margin-bottom:30px;">
           <h2 style="color:#10b981;margin:0;">UNIFIX</h2>
@@ -79,19 +82,13 @@ const resend = getResend();
         <p style="color:#1f2937;font-size:14px;">Please log in to UNIFIX, update your profile, and resubmit for verification.</p>
         <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
         <p style="color:#6b7280;font-size:12px;text-align:center;">UNIFIX Campus Complaint Management System</p>
-      </div>`,
-  });
+      </div>`);
 }
 
 async function sendApprovalEmail(email, fullName) {
   if (!email) throw new Error('Email is required');
-  const name = fullName || 'User';
-const resend = getResend();
-  await resend.emails.send({
-    from: 'UNIFIX <onboarding@resend.dev>',
-    to: email,
-    subject: 'UNIFIX - Account Approved!',
-    html: `
+ const name = fullName || 'User';
+  await sendBrevoEmail(email, 'UNIFIX - Account Approved!', `
       <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;background:#f9fafb;padding:20px;border-radius:8px;">
         <div style="text-align:center;margin-bottom:30px;">
           <h2 style="color:#10b981;margin:0;">UNIFIX</h2>
@@ -106,19 +103,13 @@ const resend = getResend();
         </div>
         <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
         <p style="color:#6b7280;font-size:12px;text-align:center;">UNIFIX Campus Complaint Management System</p>
-      </div>`,
-  });
+      </div>`);
 }
 
 async function sendIdCardRejectionEmail(email, fullName, reason) {
   if (!email) throw new Error('Email is required');
-  const name = fullName || 'User';
-const resend = getResend();
-  await resend.emails.send({
-    from: 'UNIFIX <onboarding@resend.dev>',
-    to: email,
-    subject: 'UNIFIX - ID Card Update Request Rejected',
-    html: `
+ const name = fullName || 'User';
+  await sendBrevoEmail(email, 'UNIFIX - ID Card Update Request Rejected', `
       <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;background:#f9fafb;padding:20px;border-radius:8px;">
         <div style="text-align:center;margin-bottom:30px;">
           <h2 style="color:#10b981;margin:0;">UNIFIX</h2>
@@ -135,14 +126,11 @@ const resend = getResend();
         <p style="color:#1f2937;font-size:14px;">You can resubmit from the <strong>Personal Information</strong> section in the UNIFIX app.</p>
         <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
         <p style="color:#6b7280;font-size:12px;text-align:center;">UNIFIX Campus Complaint Management System</p>
-      </div>`,
-  });
+      </div>`);
 }
 
 async function sendRaggingReportEmail(hodEmail, report) {
- const resend = getResend();
-
-  const reporterRows = report.isAnonymous
+ const reporterRows = report.isAnonymous
     ? `
       <tr>
         <td style="padding:10px 14px;background:#fff5f5;border-bottom:1px solid #fee2e2;">
@@ -208,11 +196,7 @@ async function sendRaggingReportEmail(hodEmail, report) {
         </td>
       </tr>`;
 
- await resend.emails.send({
-    from: 'UNIFIX <onboarding@resend.dev>',
-    to: hodEmail,
-    subject: `UNIFIX — Ragging Report Received | Immediate Action Required`,
-    html: `
+await sendBrevoEmail(hodEmail, `UNIFIX — Ragging Report Received | Immediate Action Required`, `
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
@@ -307,10 +291,8 @@ async function sendRaggingReportEmail(hodEmail, report) {
   </tr>
 </table>
 </body>
-</html>`,
-  });
+</html>`);
 }
-
 module.exports = {
   sendOTPEmail,
   sendRejectionEmail,

@@ -1,6 +1,20 @@
 const admin = require('../config/firebase');
 const { sendSuccess, sendError } = require('../utils/response');
-const { getResend } = require('../config/nodemailer');
+const SibApiV3Sdk = require('sib-api-v3-sdk');
+const getBrevoClient = () => {
+  const client = SibApiV3Sdk.ApiClient.instance;
+  client.authentications['api-key'].apiKey = process.env.BREVO_API_KEY;
+  return new SibApiV3Sdk.TransactionalEmailsApi();
+};
+const sendBrevoEmail = async (to, subject, htmlContent) => {
+  const api = getBrevoClient();
+  await api.sendTransacEmail({
+    sender: { name: 'UNIFIX', email: process.env.BREVO_SENDER_EMAIL },
+    to: [{ email: to }],
+    subject,
+    htmlContent,
+  });
+};
 const logger = require('../services/logger');
 const { ESCALATION_LIMITS, NO_ACCEPTANCE_LIMITS, HOD_EMAIL_DELAY } = require('../config/escalationLimits');
 
@@ -38,16 +52,12 @@ function toDate(val) {
 }
 
 async function sendEscalationHODEmail(complaint) {
-  const resend = getResend();
   const acceptedAt = toDate(complaint.acceptedAt);
   const flaggedAt = toDate(complaint.flaggedAt);
   const createdAt = toDate(complaint.createdAt);
   const elapsed = formatElapsed(Date.now() - (acceptedAt ? acceptedAt.getTime() : createdAt ? createdAt.getTime() : Date.now()));
 
-  await resend.emails.send({
-    from: 'UNIFIX <onboarding@resend.dev>',
-    to: process.env.HOD_EMAIL,
-subject: `UNIFIX: Unresolved Complaint – ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`,    html: `
+    await sendBrevoEmail(process.env.HOD_EMAIL, `UNIFIX: Unresolved Complaint – ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`, `
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
@@ -119,20 +129,15 @@ subject: `UNIFIX: Unresolved Complaint – ${capitalize(complaint.category)} Iss
     </table>
   </td></tr>
 </table>
-</body></html>`,
-  });
+</body></html>`);
 }
-
 async function sendHODResolutionEmail(complaint, resolvedBy) {
-  const resend = getResend();
+ 
   const createdAt = toDate(complaint.createdAt);
   const flaggedAt = toDate(complaint.flaggedAt);
   const resolvedAt = toDate(complaint.flagResolvedAt) || new Date();
 
-  await resend.emails.send({
-   from: 'UNIFIX <onboarding@resend.dev>',
-    to: process.env.HOD_EMAIL,
-subject: `UNIFIX: Complaint Resolved - ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`,    html: `
+ await sendBrevoEmail(process.env.HOD_EMAIL, `UNIFIX: Complaint Resolved - ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`, `
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
@@ -200,8 +205,7 @@ subject: `UNIFIX: Complaint Resolved - ${capitalize(complaint.category)} Issue a
     </table>
   </td></tr>
 </table>
-</body></html>`,
-  });
+</body></html>`);
 }
 
 async function notifyStudent(submittedBy, title, body, data) {
