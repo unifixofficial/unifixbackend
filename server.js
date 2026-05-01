@@ -34,6 +34,18 @@ app.use('/analytics', require('./routes/analyticsRoutes'));
 app.get('/health', (req, res) =>
   res.json({ status: 'OK', timestamp: new Date().toISOString() })
 );
+
+app.get('/test-email', async (req, res) => {
+  try {
+    const { getTransporter } = require('./config/nodemailer');
+    const transporter = getTransporter();
+    await transporter.verify();
+    res.json({ status: 'OK', user: process.env.EMAIL_USER });
+  } catch (err) {
+    res.json({ status: 'FAILED', error: err.message });
+  }
+});
+
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
 app.use(errorHandler);
 
