@@ -44,7 +44,7 @@ async function sendEscalationHODEmail(complaint) {
   const createdAt = toDate(complaint.createdAt);
   const elapsed = formatElapsed(Date.now() - (acceptedAt ? acceptedAt.getTime() : createdAt ? createdAt.getTime() : Date.now()));
 
-  await transporter.sendMail({
+  await resend.emails.send({
     from: 'UNIFIX <onboarding@resend.dev>',
     to: process.env.HOD_EMAIL,
 subject: `UNIFIX: Unresolved Complaint – ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`,    html: `
@@ -129,7 +129,7 @@ async function sendHODResolutionEmail(complaint, resolvedBy) {
   const flaggedAt = toDate(complaint.flaggedAt);
   const resolvedAt = toDate(complaint.flagResolvedAt) || new Date();
 
-  await transporter.sendMail({
+  await resend.emails.send({
    from: 'UNIFIX <onboarding@resend.dev>',
     to: process.env.HOD_EMAIL,
 subject: `UNIFIX: Complaint Resolved - ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`,    html: `
