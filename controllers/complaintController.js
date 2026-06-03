@@ -140,7 +140,7 @@ const docRef = await admin.firestore().collection('complaints').add(complaintDat
     if (assignableTo.length > 0 && requiredDesignation) {
       const staffTokens = await getTokensByDesignation(admin.firestore(), requiredDesignation, uid, notifyGender);
       const issueTitle = subIssue || customIssue || 'New Issue';
-      sendPushNotification(staffTokens, 'New Complaint Assigned', `${userData.fullName || 'Someone'} reported: ${issueTitle} at ${building}`, {
+     sendPushNotification(staffTokens, 'New Complaint Assigned', `${userData.fullName || 'Someone'} reported: ${issueTitle} at ${building.replace(/\s*—\s*/g, ', ')}`, {
         type: 'new_complaint',
         complaintId: docRef.id,
         ticketId,
