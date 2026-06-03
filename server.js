@@ -16,7 +16,8 @@ require('./workers/escalationWorker');
 
 const app = express();
 app.use(cors({
-  origin: ['https://unifix-admin.vercel.app'],
+ origin: ['https://unifix-admin.vercel.app', 'https://unifixapp.vercel.app/'],
+
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
 }));
@@ -30,6 +31,7 @@ app.use('/complaints', require('./routes/complaints'));
 app.use('/lost-found', require('./routes/lostFound'));
 app.use('/lost-reports', require('./routes/lostReportRoutes'));
 app.use('/analytics', require('./routes/analyticsRoutes'));
+app.use('/contact', require('./routes/contact'));
 
 app.get('/health', (req, res) =>
   res.json({ status: 'OK', timestamp: new Date().toISOString() })
