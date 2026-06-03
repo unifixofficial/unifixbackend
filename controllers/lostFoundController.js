@@ -78,7 +78,7 @@ const post = async (req, res) => {
       await sendPushNotification(
         ownerTokens,
         'Lost & Found',
-        `You posted a found item: ${itemName.trim()} — Collect from ${collectLocation.trim()}`,
+       `You posted a found item: ${itemName.trim()} · Collect from ${collectLocation.trim()}`,
         { type: 'new_lost_found', itemId: docRef.id, postedByRole: userData.role || '' }
       );
     }
@@ -87,7 +87,7 @@ const post = async (req, res) => {
       await sendPushNotification(
         othersTokens,
         'Lost & Found',
-        `${userData.fullName || 'Someone'} found: ${itemName.trim()} — Collect from ${collectLocation.trim()}`,
+       `${userData.fullName || 'Someone'} found: ${itemName.trim()} · Collect from ${collectLocation.trim()}`,
         { type: 'new_lost_found', itemId: docRef.id, postedByRole: userData.role || '' }
       );
     }
