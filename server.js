@@ -16,7 +16,7 @@ require('./workers/escalationWorker');
 
 const app = express();
 app.use(cors({
- origin: ['https://unifix-admin.vercel.app', 'https://unifixapp.vercel.app/'],
+ origin: ['https://unifix-admin.vercel.app', 'https://unifixapp.vercel.app'],
 
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
