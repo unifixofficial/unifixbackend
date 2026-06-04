@@ -67,7 +67,7 @@ const post = async (req, res) => {
       await sendPushNotification(
         otherStudentTeacherTokens,
         'Lost Item Report',
-       `${userData.fullName || 'Someone'} lost a ${itemName.trim()} · can you help?`,
+      `${userData.fullName || 'Someone'} lost: ${itemName.trim()}, Can you help?`,
         { type: 'new_lost_report', reportId: docRef.id }
       );
     }

@@ -108,7 +108,7 @@ async function sendEscalationHODEmail(complaint) {
           </td></tr>
           <tr><td style="padding:10px 14px;background:#f8fafc;border-bottom:1px solid #f1f5f9;">
             <span style="display:block;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:3px;">Admin Handling</span>
-            <span style="font-size:13px;font-weight:600;color:#0f172a;">${complaint.adminHandling ? 'Yes — Admin took ownership but did not resolve' : 'No'}</span>
+            <span style="font-size:13px;font-weight:600;color:#0f172a;">${complaint.adminHandling ? 'Yes, Admin took ownership but did not resolve' : 'No'}</span>
           </td></tr>
           <tr><td style="padding:10px 14px;background:#ffffff;border-bottom:1px solid #f1f5f9;">
             <span style="display:block;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:3px;">Time Elapsed</span>
