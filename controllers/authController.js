@@ -77,7 +77,6 @@ const verifyOtp = async (req, res) => {
       });
     }
 
-    await deleteOTPFromFirestore(email);
     const token = await admin.auth().createCustomToken(userRecord.uid);
     sendSuccess(res, { message: 'Email verified successfully', uid: userRecord.uid, token });
   } catch (error) {
@@ -143,8 +142,7 @@ const verifyResetOtp = async (req, res) => {
     if (userSnapshot.empty) return sendError(res, 'User not found', 400);
 
     const uid = userSnapshot.docs[0].data().uid;
-    await admin.auth().updateUser(uid, { password: newPassword });
-    await deleteOTPFromFirestore(email);
+  await admin.auth().updateUser(uid, { password: newPassword });
 
     sendSuccess(res, { message: 'Password reset successfully' });
   } catch (error) {
@@ -242,8 +240,9 @@ const changePassword = async (req, res) => {
 
 const updateProfile = async (req, res) => {
   try {
-    const { fullName, phone } = req.body;
+const { fullName, phone } = req.body;
     const uid = req.user?.uid || req.uid;
+    if (!fullName || !fullName.trim()) return sendError(res, 'Full name is required', 400);
     const updateData = {
       fullName: fullName.trim(),
       updatedAt: admin.firestore.Timestamp.now(),
@@ -430,7 +429,7 @@ const savePushToken = async (req, res) => {
 
 
 
-const HOD_EMAIL = 'shahiduddin153@gmail.com';
+const HOD_EMAIL = process.env.HOD_EMAIL;
 
 const reportRagging = async (req, res) => {
   try {

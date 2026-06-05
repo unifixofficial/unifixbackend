@@ -196,7 +196,7 @@ async function sendRaggingReportEmail(hodEmail, report) {
         </td>
       </tr>`;
 
-await sendBrevoEmail(hodEmail, `UNIFIX — Ragging Report Received | Immediate Action Required`, `
+await sendBrevoEmail(hodEmail, `UNIFIX: Ragging Report Received | Immediate Action Required`, `
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
@@ -212,7 +212,7 @@ await sendBrevoEmail(hodEmail, `UNIFIX — Ragging Report Received | Immediate A
               <tr>
                 <td>
                   <p style="margin:0;font-size:20px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;">UNIFIX</p>
-                  <p style="margin:4px 0 0;font-size:12px;color:#94a3b8;letter-spacing:0.5px;text-transform:uppercase;">Campus Complaint Management System — VCET</p>
+                  <p style="margin:4px 0 0;font-size:12px;color:#94a3b8;letter-spacing:0.5px;text-transform:uppercase;">Campus Complaint Management System, VCET</p>
                 </td>
                 <td align="right">
                   <div style="background:#dc2626;border-radius:8px;padding:8px 14px;display:inline-block;">
@@ -262,7 +262,7 @@ await sendBrevoEmail(hodEmail, `UNIFIX — Ragging Report Received | Immediate A
 
             <!-- LEGAL NOTE -->
             <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;">
-              <p style="margin:0 0 6px;font-size:12px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:0.4px;">Confidential — Legal Obligation</p>
+              <p style="margin:0 0 6px;font-size:12px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:0.4px;">Confidential: Legal Obligation</p>
               <p style="margin:0;font-size:12px;color:#166534;line-height:1.6;">This report is strictly confidential and must be handled as per UGC Anti-Ragging Regulations 2009 and the Maharashtra Prohibition of Ragging Act. Disciplinary action must commence within 72 hours of receipt.</p>
             </div>
 
@@ -275,7 +275,7 @@ await sendBrevoEmail(hodEmail, `UNIFIX — Ragging Report Received | Immediate A
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td>
-                  <p style="margin:0;font-size:11px;color:#94a3b8;">UNIFIX Platform — Vidyavardhini's College of Engineering & Technology</p>
+                  <p style="margin:0;font-size:11px;color:#94a3b8;">UNIFIX Platform, Vidyavardhini's College of Engineering & Technology</p>
                   <p style="margin:4px 0 0;font-size:11px;color:#cbd5e1;">This is an automated notification. Do not reply to this email.</p>
                 </td>
                 <td align="right">

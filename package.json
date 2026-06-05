@@ -13,6 +13,7 @@
   "license": "ISC",
   "dependencies": {
     "@getbrevo/brevo": "^5.0.4",
+    "@sentry/node": "^10.56.0",
     "axios": "^1.13.6",
     "bullmq": "^5.76.2",
     "cors": "^2.8.6",
@@ -26,6 +27,7 @@
     "jsonwebtoken": "^9.0.3",
     "node-cron": "^4.2.1",
     "nodemailer": "^8.0.1",
+    "rate-limit-redis": "^5.0.0",
     "sib-api-v3-sdk": "^8.5.0",
     "winston": "^3.19.0"
   },

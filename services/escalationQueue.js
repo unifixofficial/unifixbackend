@@ -38,15 +38,41 @@ async function scheduleHodEmail(complaintId) {
 
 async function cancelEscalation(complaintId) {
   try {
-    const delayed = await escalationQueue.getDelayed();
-    for (const job of delayed) {
-      if (job.data.complaintId === complaintId) {
-        await job.remove();
-      }
-    }
+    const [delayed, waiting] = await Promise.all([
+      escalationQueue.getDelayed(),
+      escalationQueue.getWaiting(),
+    ]);
+    const allJobs = [...delayed, ...waiting];
+    await Promise.all(
+      allJobs
+        .filter(job => job.data.complaintId === complaintId)
+        .map(job => job.remove())
+    );
   } catch (err) {
     console.error(`[Queue] Cancel failed for ${complaintId}:`, err.message);
   }
 }
 
-module.exports = { escalationQueue, scheduleEscalation, scheduleHodEmail, cancelEscalation };
+const cleanupQueue = new Queue('cleanup', {
+  connection: redis,
+  defaultJobOptions: {
+    removeOnComplete: 10,
+    removeOnFail: 20,
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 5000 },
+  },
+});
+
+async function scheduleCleanup() {
+  // Run daily at midnight IST (18:30 UTC)
+  await cleanupQueue.add(
+    'daily-cleanup',
+    {},
+    {
+      repeat: { cron: '30 18 * * *' },
+      jobId: 'daily-cleanup',
+    }
+  );
+}
+
+module.exports = { escalationQueue, cleanupQueue, scheduleEscalation, scheduleHodEmail, cancelEscalation, scheduleCleanup };

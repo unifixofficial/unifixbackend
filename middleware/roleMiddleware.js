@@ -1,17 +1,18 @@
-const jwt = require('jsonwebtoken');
+const admin = require('../config/firebase');
 
-const verifyAdminToken = (req, res, next) => {
+const verifyAdminToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    if (decoded.role !== 'admin') {
+    const decoded = await admin.auth().verifyIdToken(token);
+    const userDoc = await admin.firestore().collection('users').doc(decoded.uid).get();
+    if (!userDoc.exists || userDoc.data()?.role !== 'admin') {
       return res.status(403).json({ error: 'Forbidden' });
     }
-    req.admin = decoded;
+    req.admin = { uid: decoded.uid, ...userDoc.data() };
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });

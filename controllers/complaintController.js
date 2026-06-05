@@ -190,6 +190,7 @@ await complaintRef.update({
     acceptedAt: admin.firestore.Timestamp.now(),
     updatedAt: admin.firestore.Timestamp.now(),
   });
+  // Only reschedule after Firestore confirms the update
   cancelEscalation(complaintId);
   scheduleEscalation(complaintId, complaint.category, Date.now());
 
@@ -211,7 +212,10 @@ await complaintRef.update({
       ticketId: complaint.ticketId,
     });
 
-    await notifyStaffMember(uid, 'Complaint Accepted', `You accepted: ${issueTitle} at ${complaint.building}`, {
+  const cleanBuilding = complaint.building.replace(/—/g, '').trim();
+const cleanTitle = issueTitle.replace(/—/g, '').trim();
+
+await notifyStaffMember(uid, 'Complaint Accepted', `You accepted: ${cleanTitle} at ${cleanBuilding}, Room ${complaint.roomDetail || ''}`, {
       type: 'complaint_accepted',
       complaintId,
       ticketId: complaint.ticketId,
@@ -310,8 +314,13 @@ if (status === 'completed') {
         }
 
         // Send HOD resolution email if HOD was already notified
-        if (complaint.hodEmailSent) {
+       if (complaint.hodEmailSent) {
           try {
+            await complaintRef.update({
+              flagResolvedBy: 'staff',
+              flagResolvedAt: admin.firestore.Timestamp.now(),
+              hodResolutionEmailSent: true,
+            });
             const { sendHODResolutionEmail } = require('../controllers/escalationController');
             const updatedComplaint = {
               ...complaint,
@@ -320,7 +329,6 @@ if (status === 'completed') {
               flagResolvedAt: admin.firestore.Timestamp.now(),
             };
             await sendHODResolutionEmail(updatedComplaint, 'staff');
-            await complaintRef.update({ hodResolutionEmailSent: true });
           } catch (emailErr) {
             console.error('HOD resolution email failed:', emailErr.message);
           }
@@ -383,18 +391,18 @@ if (newAssignableTo.length === 0) {
 
     await ref.update(updateData);
 
-    sendSuccess(res, {
-      message: newAssignableTo.length > 0
-        ? 'You rejected this complaint. Other staff can still accept it.'
-        : 'Complaint rejected by all staff.',
-    });
- await createAuditLog({
+await createAuditLog({
       action: 'complaint_rejected',
       performedBy: uid,
       performedByRole: 'staff',
       targetId: complaintId,
       targetType: 'complaint',
       metadata: { reason, allRejected: newAssignableTo.length === 0 },
+    });
+    sendSuccess(res, {
+      message: newAssignableTo.length > 0
+        ? 'You rejected this complaint. Other staff can still accept it.'
+        : 'Complaint rejected by all staff.',
     });
   } catch (error) {
     logger.error('[Complaint] Reject failed', { error: error.message, complaintId });
@@ -412,10 +420,11 @@ const rate = async (req, res) => {
     if (!snap.exists) return sendError(res, 'Complaint not found.', 404);
 
     const complaint = snap.data();
-    if (complaint.submittedBy !== uid) return sendError(res, 'You can only rate your own complaints.', 403);
+   if (complaint.submittedBy !== uid) return sendError(res, 'You can only rate your own complaints.', 403);
     if (complaint.status !== 'completed') return sendError(res, 'You can only rate completed complaints.', 400);
     if (complaint.rating !== null && complaint.rating !== undefined) return sendError(res, 'You have already rated this complaint.', 400);
     if (!complaint.assignedTo) return sendError(res, 'No staff assigned to rate.', 400);
+  if (complaint.ratingDisabled === true) return sendError(res, 'This complaint cannot be rated.', 400);
 
     await ref.update({
       rating,
@@ -458,14 +467,15 @@ const myComplaints = async (req, res) => {
       .orderBy('createdAt', 'desc')
       .get();
 
-    const complaints = await Promise.all(
-      snapshot.docs.map(async (doc) => {
-        const data = doc.data();
-        let assignedToPhone = data.assignedToPhone || '';
-        if (data.assignedTo && !assignedToPhone) assignedToPhone = await getPhoneForUid(data.assignedTo);
-        return { id: doc.id, ...data, assignedToPhone };
-      })
-    );
+// Batch fetch phones for all assigned staff in one pass
+    const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const staffUids = [...new Set(docs.filter(d => d.assignedTo && !d.assignedToPhone).map(d => d.assignedTo))];
+   const phoneMap = {};
+    await Promise.all(staffUids.map(async uid => { phoneMap[uid] = await getPhoneForUid(uid); }));
+    const complaints = docs.map(d => ({
+      ...d,
+      assignedToPhone: d.assignedToPhone || phoneMap[d.assignedTo] || '',
+    }));
 
     sendSuccess(res, { complaints });
   } catch (error) {

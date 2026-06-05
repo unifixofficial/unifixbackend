@@ -75,8 +75,24 @@ const sendViaExpo = async (expoPushTokens, title, body, data = {}) => {
         },
         body: JSON.stringify(batch),
       });
-    const result = await response.json();
+  const result = await response.json();
       logger.info('[Notification] Expo push result', { result });
+
+      // Clean up invalid Expo tokens
+      if (result?.data) {
+        const db = admin.firestore();
+        await Promise.all(
+          result.data.map(async (ticket, idx) => {
+            if (ticket.status === 'error' && ticket.details?.error === 'DeviceNotRegistered') {
+              const staleToken = batch[idx]?.to;
+              if (staleToken) {
+                const snap = await db.collection('users').where('expoPushToken', '==', staleToken).get();
+                snap.forEach(doc => doc.ref.update({ expoPushToken: null }));
+              }
+            }
+          })
+        );
+      }
     }
 } catch (error) {
     logger.error('[Notification] Expo push error', { error: error.message });

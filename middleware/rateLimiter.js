@@ -1,4 +1,6 @@
 const { default: rateLimit, ipKeyGenerator } = require('express-rate-limit');
+const { RedisStore } = require('rate-limit-redis');
+const redis = require('../config/redis');
 
 const userOrIpKey = (req) => req.user?.uid || ipKeyGenerator(req);
 
@@ -30,12 +32,35 @@ const otpLimiter = rateLimit({
 });
 
 const complaintLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
+  store: new RedisStore({
+    sendCommand: (...args) => redis.call(...args),
+    prefix: 'complaint:',
+  }),
+  windowMs: 24 * 60 * 60 * 1000,
   max: 10,
   keyGenerator: userOrIpKey,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Too many complaints submitted. Please wait before submitting again.' },
+  skip: (req) => req.user?.role === 'admin',
+  handler: (req, res) => {
+    res.status(429).json({
+      error: 'You can only submit 10 complaints per day.',
+      retryAfter: Math.ceil((req.rateLimit.resetTime - Date.now()) / 1000),
+    });
+  },
 });
 
-module.exports = { generalLimiter, authLimiter, otpLimiter, complaintLimiter };
+const lostReportLimiter = rateLimit({
+  store: new RedisStore({
+    sendCommand: (...args) => redis.call(...args),
+    prefix: 'lostreport:',
+  }),
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: userOrIpKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many lost reports submitted. Please wait 24 hours.' },
+});
+
+module.exports = { generalLimiter, authLimiter, otpLimiter, complaintLimiter, lostReportLimiter };

@@ -54,7 +54,7 @@ const worker = new Worker(
         });
       }
 
-      const { scheduleHodEmail } = require('../services/escalationQueue');
+     const { scheduleHodEmail } = require('../services/schedulerService');
       await scheduleHodEmail(complaintId);
 
       logger.info(`[Worker] Flagged complaint ${complaintId}`);

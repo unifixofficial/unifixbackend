@@ -57,7 +57,7 @@ async function sendEscalationHODEmail(complaint) {
   const createdAt = toDate(complaint.createdAt);
   const elapsed = formatElapsed(Date.now() - (acceptedAt ? acceptedAt.getTime() : createdAt ? createdAt.getTime() : Date.now()));
 
-    await sendBrevoEmail(process.env.HOD_EMAIL, `UNIFIX: Unresolved Complaint – ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`, `
+    await sendBrevoEmail(process.env.HOD_EMAIL, `UNIFIX: Unresolved Complaint, ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`, `
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
@@ -137,7 +137,7 @@ async function sendHODResolutionEmail(complaint, resolvedBy) {
   const flaggedAt = toDate(complaint.flaggedAt);
   const resolvedAt = toDate(complaint.flagResolvedAt) || new Date();
 
- await sendBrevoEmail(process.env.HOD_EMAIL, `UNIFIX: Complaint Resolved - ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`, `
+ await sendBrevoEmail(process.env.HOD_EMAIL, `UNIFIX: Complaint Resolved, ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`, `
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
@@ -169,7 +169,9 @@ async function sendHODResolutionEmail(complaint, resolvedBy) {
           </td></tr>
           <tr><td style="padding:10px 14px;background:#ffffff;border-bottom:1px solid #f1f5f9;">
             <span style="display:block;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:3px;">Location</span>
-<span style="font-size:13px;font-weight:600;color:#0f172a;">${cleanLocation(complaint)}</span>          <tr><td style="padding:10px 14px;background:#f8fafc;border-bottom:1px solid #f1f5f9;">
+<span style="font-size:13px;font-weight:600;color:#0f172a;">${cleanLocation(complaint)}</span>
+          </td></tr>
+          <tr><td style="padding:10px 14px;background:#f8fafc;border-bottom:1px solid #f1f5f9;">
             <span style="display:block;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:3px;">Description</span>
             <span style="font-size:13px;font-weight:600;color:#0f172a;">${complaint.description || 'N/A'}</span>
           </td></tr>

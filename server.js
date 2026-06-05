@@ -1,9 +1,10 @@
-const dns = require('dns');
-dns.setDefaultResultOrder('ipv4first');
-
 const dotenv = require('dotenv');
 dotenv.config();
 
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
+require('./config/sentry');
+const Sentry = require('@sentry/node');
 require('./config/env');
 
 const express = require('express');
@@ -13,6 +14,7 @@ const { generalLimiter } = require('./middleware/rateLimiter');
 const errorHandler = require('./middleware/errorHandler');
 
 require('./workers/escalationWorker');
+require('./workers/cleanupWorker');
 
 const app = express();
 app.use(cors({
@@ -48,8 +50,16 @@ app.get('/test-email', async (req, res) => {
   }
 });
 
+app.get('/test-sentry', (req, res) => {
+  throw new Error('Sentry is working!');
+});
+
+Sentry.setupExpressErrorHandler(app);
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
 app.use(errorHandler);
+
+const { scheduleCleanup } = require('./services/escalationQueue');
+scheduleCleanup().catch(err => logger.error('[Cleanup] Failed to schedule cleanup job', { error: err.message }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
