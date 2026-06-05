@@ -1,23 +1,51 @@
-  const admin = require('../config/firebase');
-  const jwt = require('jsonwebtoken');
-  const { sendRejectionEmail, sendIdCardRejectionEmail } = require('../services/emailService');
+const admin = require('../config/firebase');
+const axios = require('axios');
+const { sendRejectionEmail, sendIdCardRejectionEmail } = require('../services/emailService');
   const { sendSuccess, sendError } = require('../utils/response');
   const { createAuditLog } = require('../services/auditLogService');
   const logger = require('../services/logger');
 
-  const login = async (req, res) => {
-    try {
-      const { email, password } = req.body;
-      if (!email || !password) return sendError(res, 'Email and password required', 400);
-      if (email !== process.env.ADMIN_EMAIL || password !== process.env.ADMIN_PASSWORD) {
-        return sendError(res, 'Invalid admin credentials', 401);
+const login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return sendError(res, 'Email and password required', 400);
+
+  let signInData;
+try {
+  const signInRes = await axios.post(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${process.env.FIREBASE_API_KEY}`,
+    { email, password, returnSecureToken: true }
+  );
+  signInData = signInRes.data;
+} catch (firebaseError) {
+  const code = firebaseError.response?.data?.error?.message || '';
+  
+  logger.error('[Admin] Firebase auth failed', { code, full: firebaseError.response?.data });
+      if (code.includes('TOO_MANY_ATTEMPTS')) {
+        return sendError(res, 'Too many attempts. Please try again later.', 400);
       }
-      const token = jwt.sign({ email, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '8h' });
-      sendSuccess(res, { token });
-    } catch (error) {
-      sendError(res, error.message);
+      return sendError(res, 'Invalid admin credentials', 401);
     }
-  };
+
+    const userRecord = await admin.auth().getUserByEmail(email);
+    const userDoc = await admin.firestore().collection('users').doc(userRecord.uid).get();
+    
+if (!userDoc.exists || userDoc.data()?.role !== 'admin') {
+  return sendError(res, 'Invalid admin credentials', 401);
+}
+
+   const idTokenResponse = await axios.post(
+  `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${process.env.FIREBASE_API_KEY}`,
+  { email, password, returnSecureToken: true }
+);
+const token = idTokenResponse.data.idToken;
+
+sendSuccess(res, { token });
+  } catch (error) {
+    logger.error('[Admin] login failed', { error: error.message });
+    sendError(res, error.message);
+  }
+};
 
   const getPendingStaff = async (req, res) => {
     try {

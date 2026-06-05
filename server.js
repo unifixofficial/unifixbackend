@@ -18,7 +18,7 @@ require('./workers/cleanupWorker');
 
 const app = express();
 app.use(cors({
- origin: ['https://unifix-admin.vercel.app', 'https://unifixapp.vercel.app'],
+ origin: ['https://unifix-admin.vercel.app', 'https://unifixapp.vercel.app', 'http://localhost:5173'],
 
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
@@ -50,9 +50,6 @@ app.get('/test-email', async (req, res) => {
   }
 });
 
-app.get('/test-sentry', (req, res) => {
-  throw new Error('Sentry is working!');
-});
 
 Sentry.setupExpressErrorHandler(app);
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));

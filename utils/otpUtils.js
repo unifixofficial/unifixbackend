@@ -19,14 +19,23 @@ const verifyOTPFromFirestore = async (email, otp, type) => {
   const otpType = type || 'email-verification';
   if (!email || !otp) return false;
   try {
-    const otpDoc = await admin.firestore().collection('otps').doc(email).get();
-    if (!otpDoc.exists) return false;
-    const otpData = otpDoc.data();
-    if (!otpData?.otp || !otpData?.type || !otpData?.expiresAt) return false;
-    if (otpData.type !== otpType) return false;
-    if (String(otpData.otp).trim() !== String(otp).trim()) return false;
-    if (new Date() > otpData.expiresAt.toDate()) return false;
-    return true;
+    const otpRef = admin.firestore().collection('otps').doc(email);
+    let isValid = false;
+
+    await admin.firestore().runTransaction(async (transaction) => {
+      const otpDoc = await transaction.get(otpRef);
+      if (!otpDoc.exists) return;
+      const otpData = otpDoc.data();
+      if (!otpData?.otp || !otpData?.type || !otpData?.expiresAt) return;
+      if (otpData.type !== otpType) return;
+      if (String(otpData.otp).trim() !== String(otp).trim()) return;
+      if (new Date() > otpData.expiresAt.toDate()) return;
+      // Delete inside transaction — second request will find no doc
+      transaction.delete(otpRef);
+      isValid = true;
+    });
+
+    return isValid;
   } catch {
     return false;
   }
