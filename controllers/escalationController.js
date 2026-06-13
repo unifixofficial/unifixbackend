@@ -223,6 +223,10 @@ async function notifyStudent(submittedBy, title, body, data) {
 }
 
 async function processComplaint(complaint, limit, now, batch, emailPromises, notifyPromises, adminTokens) {
+  if (complaint.flagged && complaint.flagResolved && complaint.hodResolutionEmailSent) {
+    return { flagged: false, emailSent: false };
+  }
+
   const ref = admin.firestore().collection('complaints').doc(complaint.id);
 
   const startTime = complaint.acceptedAt
@@ -291,10 +295,27 @@ flaggedNow = true;
     }
   }
 
-  if (complaint.flagged && complaint.flagResolved && !complaint.hodResolutionEmailSent) {
+ if (complaint.flagged && complaint.flagResolved && !complaint.hodResolutionEmailSent) {
     batch.update(ref, { hodResolutionEmailSent: true });
     emailSentNow = true;
     emailPromises.push(sendHODResolutionEmail(complaint, complaint.flagResolvedBy));
+  }
+
+  const isFullyDone =
+    (complaint.flagged && complaint.flagResolved && (complaint.hodResolutionEmailSent || emailSentNow)) ||
+    (flaggedNow && complaint.flagResolved);
+
+  if (isFullyDone) {
+    batch.update(ref, { nextCheckAt: admin.firestore.Timestamp.fromMillis(now + 365 * 24 * 60 * 60 * 1000) });
+  } else if (flaggedNow && !complaint.hodEmailSent) {
+    batch.update(ref, { nextCheckAt: admin.firestore.Timestamp.fromMillis(now + HOD_EMAIL_DELAY) });
+  } else if (!flaggedNow && !complaint.flagged) {
+    // not yet escalated and limit not crossed — shouldn't happen since query filters on nextCheckAt,
+    // but as safety, push next check to the limit boundary
+    batch.update(ref, { nextCheckAt: admin.firestore.Timestamp.fromMillis(startTime.getTime() + limit) });
+  } else if (complaint.flagged && !complaint.flagResolved && complaint.hodEmailSent) {
+    // flagged, HOD already emailed, waiting for resolution — recheck later
+    batch.update(ref, { nextCheckAt: admin.firestore.Timestamp.fromMillis(now + HOD_EMAIL_DELAY) });
   }
 
   return { flagged: flaggedNow, emailSent: emailSentNow };
@@ -319,14 +340,18 @@ async function checkEscalations(req, res) {
     const emailPromises = [];
     const notifyPromises = [];
 
+const nowTs = admin.firestore.Timestamp.fromMillis(now);
+
     const [assignedSnapshot, pendingSnapshot] = await Promise.all([
       admin.firestore()
         .collection('complaints')
         .where('status', 'in', ['assigned', 'in_progress'])
+        .where('nextCheckAt', '<=', nowTs)
         .get(),
       admin.firestore()
         .collection('complaints')
         .where('status', '==', 'pending')
+        .where('nextCheckAt', '<=', nowTs)
         .get(),
     ]);
 
@@ -348,7 +373,9 @@ if (!limit) continue;
       if (result.emailSent) emailsSentCount++;
     }
 
-await batch.commit();
+if (flaggedCount > 0 || emailsSentCount > 0) {
+      await batch.commit();
+    }
     await Promise.allSettled([...emailPromises, ...notifyPromises]);
 
     logger.info('[Escalation] Check complete', { flagged: flaggedCount, emailsSent: emailsSentCount });

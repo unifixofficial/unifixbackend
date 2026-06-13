@@ -119,9 +119,10 @@ const submit = async (req, res) => {
       rating: null,
       ratingComment: null,
       ratedAt: null,
-      createdAt: admin.firestore.Timestamp.now(),
+    createdAt: admin.firestore.Timestamp.now(),
       updatedAt: admin.firestore.Timestamp.now(),
       completedAt: null,
+      nextCheckAt: admin.firestore.Timestamp.fromMillis(Date.now() + (require('../config/escalationLimits').NO_ACCEPTANCE_LIMITS[category?.toLowerCase()] || 24 * 60 * 60 * 1000)),
     };
 
 const docRef = await admin.firestore().collection('complaints').add(complaintData);
@@ -189,6 +190,7 @@ await complaintRef.update({
     assignedToPhone: staffData.phone || '',
     acceptedAt: admin.firestore.Timestamp.now(),
     updatedAt: admin.firestore.Timestamp.now(),
+    nextCheckAt: admin.firestore.Timestamp.fromMillis(Date.now() + (require('../config/escalationLimits').ESCALATION_LIMITS[complaint.category?.toLowerCase()] || 24 * 60 * 60 * 1000)),
   });
   // Only reschedule after Firestore confirms the update
   await cancelEscalation(complaintId);
@@ -253,9 +255,9 @@ const updateStatus = async (req, res) => {
     };
 if (status === 'completed') {
     updateData.completedAt = admin.firestore.Timestamp.now();
+    updateData.nextCheckAt = admin.firestore.Timestamp.fromMillis(Date.now() + 365 * 24 * 60 * 60 * 1000);
     cancelEscalation(complaintId);
   }
-
   await complaintRef.update(updateData);
 
   await createAuditLog({
@@ -378,6 +380,7 @@ if (newAssignableTo.length === 0) {
     updateData.status = 'rejected';
     updateData.queueStatus = 'rejected';
     updateData.rejectionReason = reason;
+    updateData.nextCheckAt = admin.firestore.Timestamp.fromMillis(Date.now() + 365 * 24 * 60 * 60 * 1000);
     cancelEscalation(complaintId);
     logger.info('[Complaint] Fully rejected by all staff', { complaintId });
 
