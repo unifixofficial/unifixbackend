@@ -30,7 +30,7 @@ const worker = new Worker(
         .map(d => d.data().expoPushToken)
         .filter(t => t && t.startsWith('ExponentPushToken'));
 
-      await ref.update({
+await ref.update({
         flagged: true,
         flaggedAt: admin.firestore.Timestamp.now(),
         flagReason: complaint.acceptedAt ? 'unresolved' : 'no_acceptance',
@@ -38,6 +38,7 @@ const worker = new Worker(
         adminHandling: false,
         hodEmailSent: false,
         hodResolutionEmailSent: false,
+        updatedAt: admin.firestore.Timestamp.now(),
       });
 
       if (adminTokens.length > 0) {
@@ -58,15 +59,17 @@ const worker = new Worker(
       await scheduleHodEmail(complaintId);
 
       logger.info(`[Worker] Flagged complaint ${complaintId}`);
+      // Hash cleared server-side clients will force re-sync on next poll
     }
 
     if (job.name === 'hod-email' && complaint.flagged && !complaint.hodEmailSent) {
       const { sendEscalationHODEmail } = require('../controllers/escalationController');
       await sendEscalationHODEmail(complaint);
 
-      await ref.update({
+    await ref.update({
         hodEmailSent: true,
         hodEmailSentAt: admin.firestore.Timestamp.now(),
+        updatedAt: admin.firestore.Timestamp.now(),
       });
 
       logger.info(`[Worker] HOD email sent for complaint ${complaintId}`);

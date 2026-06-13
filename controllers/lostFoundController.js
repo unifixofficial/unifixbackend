@@ -102,6 +102,23 @@ const post = async (req, res) => {
 const feed = async (req, res) => {
   try {
     const uid = req.user.uid;
+    const since = req.query.since ? parseInt(req.query.since) : null;
+
+    if (since) {
+      const sinceTimestamp = admin.firestore.Timestamp.fromMillis(since);
+      const snapshot = await admin.firestore()
+        .collection('lostFound')
+        .where('updatedAt', '>', sinceTimestamp)
+        .orderBy('updatedAt', 'desc')
+        .get();
+      const items = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        isMyPost: doc.data().postedBy === uid,
+      }));
+      return sendSuccess(res, { items, nextCursor: null, hasMore: false });
+    }
+
     const limit = parseInt(req.query.limit) || 10;
     const after = req.query.after || null;
 
@@ -117,16 +134,13 @@ const feed = async (req, res) => {
     }
 
     const snapshot = await q.get();
-
     const items = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data(),
       createdAt: doc.data().createdAt?.toMillis?.() ?? doc.data().createdAt ?? null,
       isMyPost: doc.data().postedBy === uid,
     }));
-
     const lastDoc = snapshot.docs[snapshot.docs.length - 1];
-
     sendSuccess(res, {
       items,
       nextCursor: snapshot.docs.length === limit ? lastDoc.id : null,
@@ -211,11 +225,18 @@ const ownerTokens = await getTokenForUid(admin.firestore(), uid);
 const myPosts = async (req, res) => {
   try {
     const uid = req.user.uid;
+    const since = req.query.since ? parseInt(req.query.since) : null;
 
-    const snapshot = await admin.firestore()
+    let q = admin.firestore()
       .collection('lostFound')
-      .where('postedBy', '==', uid)
-      .get();
+      .where('postedBy', '==', uid);
+
+    if (since) {
+      const sinceTimestamp = admin.firestore.Timestamp.fromMillis(since);
+      q = q.where('updatedAt', '>', sinceTimestamp);
+    }
+
+    const snapshot = await q.get();
 
     const items = snapshot.docs
       .map(doc => ({ id: doc.id, ...doc.data(), isMyPost: true }))
@@ -233,13 +254,20 @@ const myPosts = async (req, res) => {
 
 const claims = async (req, res) => {
   try {
-    const snapshot = await admin.firestore()
-      .collection('claims')
-      .orderBy('createdAt', 'desc')
-      .get();
+    const since = req.query.since ? parseInt(req.query.since) : null;
 
+    let q = admin.firestore().collection('claims').orderBy('createdAt', 'desc');
+
+    if (since) {
+      const sinceTimestamp = admin.firestore.Timestamp.fromMillis(since);
+      q = admin.firestore()
+        .collection('claims')
+        .where('createdAt', '>', sinceTimestamp)
+        .orderBy('createdAt', 'desc');
+    }
+
+    const snapshot = await q.get();
     const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
     sendSuccess(res, { items });
   } catch (error) {
     sendError(res, error.message);

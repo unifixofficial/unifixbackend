@@ -31,36 +31,36 @@ const otpLimiter = rateLimit({
   message: { error: 'Too many OTP requests. Please wait 10 minutes.' },
 });
 
-const complaintLimiter = rateLimit({
-  store: new RedisStore({
-    sendCommand: (...args) => redis.call(...args),
-    prefix: 'complaint:',
-  }),
-  windowMs: 24 * 60 * 60 * 1000,
-  max: 10,
-  keyGenerator: userOrIpKey,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => req.user?.role === 'admin',
-  handler: (req, res) => {
-    res.status(429).json({
-      error: 'You can only submit 10 complaints per day.',
-      retryAfter: Math.ceil((req.rateLimit.resetTime - Date.now()) / 1000),
-    });
-  },
-});
+// const complaintLimiter = rateLimit({
+//   store: new RedisStore({
+//     sendCommand: (...args) => redis.call(...args),
+//     prefix: 'complaint:',
+//   }),
+//   windowMs: 24 * 60 * 60 * 1000,
+//   max: 10,
+//   keyGenerator: userOrIpKey,
+//   standardHeaders: true,
+//   legacyHeaders: false,
+//   skip: (req) => req.user?.role === 'admin',
+//   handler: (req, res) => {
+//     res.status(429).json({
+//       error: 'You can only submit 10 complaints per day.',
+//       retryAfter: Math.ceil((req.rateLimit.resetTime - Date.now()) / 1000),
+//     });
+//   },
+// });
 
-const lostReportLimiter = rateLimit({
-  store: new RedisStore({
-    sendCommand: (...args) => redis.call(...args),
-    prefix: 'lostreport:',
-  }),
-  windowMs: 24 * 60 * 60 * 1000,
-  max: 10,
-  keyGenerator: userOrIpKey,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many lost reports submitted. Please wait 24 hours.' },
-});
+// const lostReportLimiter = rateLimit({
+//   store: new RedisStore({
+//     sendCommand: (...args) => redis.call(...args),
+//     prefix: 'lostreport:',
+//   }),
+//   windowMs: 24 * 60 * 60 * 1000,
+//   max: 10,
+//   keyGenerator: userOrIpKey,
+//   standardHeaders: true,
+//   legacyHeaders: false,
+//   message: { error: 'Too many lost reports submitted. Please wait 24 hours.' },
+// });
 
-module.exports = { generalLimiter, authLimiter, otpLimiter, complaintLimiter, lostReportLimiter };
+module.exports = { generalLimiter, authLimiter, otpLimiter};

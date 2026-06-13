@@ -125,7 +125,7 @@ const submit = async (req, res) => {
     };
 
 const docRef = await admin.firestore().collection('complaints').add(complaintData);
-  scheduleEscalation(docRef.id, category, Date.now());
+ await scheduleEscalation(docRef.id, category, Date.now());
 
   await createAuditLog({
     action: 'complaint_submitted',
@@ -191,8 +191,8 @@ await complaintRef.update({
     updatedAt: admin.firestore.Timestamp.now(),
   });
   // Only reschedule after Firestore confirms the update
-  cancelEscalation(complaintId);
-  scheduleEscalation(complaintId, complaint.category, Date.now());
+  await cancelEscalation(complaintId);
+  await scheduleEscalation(complaintId, complaint.category, Date.now());
 
   await createAuditLog({
     action: 'complaint_accepted',
@@ -344,8 +344,8 @@ if (status === 'completed') {
 
 const reject = async (req, res) => {
   try {
-    const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-    if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
+      const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
+      if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
 
     const { complaintId, reason } = req.body;
     if (!complaintId || !reason) return sendError(res, 'complaintId and reason are required.', 400);
@@ -461,11 +461,16 @@ const rate = async (req, res) => {
 const myComplaints = async (req, res) => {
   try {
     const uid = req.user.uid;
-    const snapshot = await admin.firestore()
+    const since = req.query.since ? parseInt(req.query.since) : null;
+    let query = admin.firestore()
       .collection('complaints')
       .where('submittedBy', '==', uid)
-      .orderBy('createdAt', 'desc')
-      .get();
+      .orderBy('updatedAt', 'desc');
+    if (since) {
+      const sinceTimestamp = admin.firestore.Timestamp.fromMillis(since);
+      query = query.where('updatedAt', '>', sinceTimestamp);
+    }
+    const snapshot = await query.get();
 
 // Batch fetch phones for all assigned staff in one pass
     const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -486,6 +491,8 @@ const myComplaints = async (req, res) => {
 const staffComplaints = async (req, res) => {
   try {
     const uid = req.user.uid;
+    const since = req.query.since ? parseInt(req.query.since) : null;
+    const sinceTimestamp = since ? admin.firestore.Timestamp.fromMillis(since) : null;
 
     const [pendingSnapshot, assignedSnapshot] = await Promise.all([
       admin.firestore().collection('complaints')
@@ -499,11 +506,24 @@ const staffComplaints = async (req, res) => {
         .get(),
     ]);
 
-  const rejectedBySnapshot = await admin.firestore()
-      .collection('complaints')
+let pendingQuery = admin.firestore().collection('complaints')
+      .where('assignableTo', 'array-contains', uid)
+      .where('status', '==', 'pending')
+      .orderBy('createdAt', 'desc');
+    let assignedQuery = admin.firestore().collection('complaints')
+      .where('assignedTo', '==', uid)
+      .orderBy('createdAt', 'desc');
+    let rejectedQuery = admin.firestore().collection('complaints')
       .where('rejectedByUids', 'array-contains', uid)
-      .orderBy('createdAt', 'desc')
-      .get();
+      .orderBy('createdAt', 'desc');
+
+    if (sinceTimestamp) {
+      pendingQuery = pendingQuery.where('updatedAt', '>', sinceTimestamp);
+      assignedQuery = assignedQuery.where('updatedAt', '>', sinceTimestamp);
+      rejectedQuery = rejectedQuery.where('updatedAt', '>', sinceTimestamp);
+    }
+
+  const rejectedBySnapshot = await rejectedQuery.get();
 
     const seenIds = new Set();
     const allDocs = [...pendingSnapshot.docs, ...assignedSnapshot.docs, ...rejectedBySnapshot.docs];

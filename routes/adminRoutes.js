@@ -45,6 +45,24 @@ router.post('/approve-staff', verifyAdminToken, approveStaff);
 router.post('/reject-staff', verifyAdminToken, rejectStaff);
 router.get('/stats', verifyAdminToken, getStats);
 router.get('/all-complaints', verifyAdminToken, getAllComplaints);
+router.get('/all-complaints/hash', verifyAdminToken, async (req, res) => {
+  try {
+    const admin = require('../config/firebase');
+    const snapshot = await admin.firestore()
+      .collection('complaints')
+      .orderBy('updatedAt', 'desc')
+      .limit(1)
+      .get();
+    const count = (await admin.firestore()
+      .collection('complaints')
+      .count()
+      .get()).data().count;
+    const latest = snapshot.empty ? 0 : (snapshot.docs[0].data().updatedAt?._seconds || 0);
+    res.json({ hash: `${count}_${latest}`, serverTime: Date.now() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 router.get('/all-users', verifyAdminToken, getAllUsers);
 router.get('/user/:uid/idcard', verifyAdminToken, getUserIdCard);
 router.get('/idcard-requests', verifyAdminToken, getIdCardRequests);

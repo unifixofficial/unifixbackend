@@ -13,8 +13,12 @@ const escalationQueue = new Queue('escalation', {
 });
 
 async function scheduleEscalation(complaintId, category, startTime) {
-  const limit = ESCALATION_LIMITS[category?.toLowerCase()];
-  if (!limit) return;
+   const normalizedCategory = category?.toLowerCase().trim();
+  const limit = ESCALATION_LIMITS[normalizedCategory];
+  if (!limit) {
+    console.warn(`[Escalation] No limit found for category: "${category}" (normalized: "${normalizedCategory}")`);
+    return;
+  }
 
   const elapsed = Date.now() - startTime;
   const remaining = Math.max(limit - elapsed, 0);
@@ -38,11 +42,12 @@ async function scheduleHodEmail(complaintId) {
 
 async function cancelEscalation(complaintId) {
   try {
-    const [delayed, waiting] = await Promise.all([
+    const [delayed, waiting, active] = await Promise.all([
       escalationQueue.getDelayed(),
       escalationQueue.getWaiting(),
+      escalationQueue.getActive(),
     ]);
-    const allJobs = [...delayed, ...waiting];
+    const allJobs = [...delayed, ...waiting, ...active];
     await Promise.all(
       allJobs
         .filter(job => job.data.complaintId === complaintId)

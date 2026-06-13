@@ -236,7 +236,7 @@ async function processComplaint(complaint, limit, now, batch, emailPromises, not
   let emailSentNow = false;
 
   if (elapsed > limit && !complaint.flagged) {
-    batch.update(ref, {
+ batch.update(ref, {
       flagged: true,
       flaggedAt: admin.firestore.Timestamp.now(),
       flagReason: complaint.acceptedAt ? 'unresolved' : 'no_acceptance',
@@ -244,6 +244,7 @@ async function processComplaint(complaint, limit, now, batch, emailPromises, not
       adminHandling: false,
       hodEmailSent: false,
       hodResolutionEmailSent: false,
+      updatedAt: admin.firestore.Timestamp.now(),
     });
 flaggedNow = true;
     const { scheduleHodEmail } = require('../services/schedulerService');
@@ -274,9 +275,10 @@ flaggedNow = true;
   if (complaint.flagged && !complaint.flagResolved && !complaint.hodEmailSent) {
     const flaggedAt = toDate(complaint.flaggedAt);
     if (flaggedAt && (now - flaggedAt.getTime()) > HOD_EMAIL_DELAY) {
-      batch.update(ref, {
+   batch.update(ref, {
         hodEmailSent: true,
         hodEmailSentAt: admin.firestore.Timestamp.now(),
+        updatedAt: admin.firestore.Timestamp.now(),
       });
       emailSentNow = true;
       emailPromises.push(sendEscalationHODEmail(complaint));

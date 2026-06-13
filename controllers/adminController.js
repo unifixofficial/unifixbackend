@@ -185,9 +185,15 @@ sendSuccess(res, { token });
     }
   };
 
-  const getAllComplaints = async (req, res) => {
+const getAllComplaints = async (req, res) => {
     try {
-      const snapshot = await admin.firestore().collection('complaints').orderBy('createdAt', 'desc').get();
+      const since = req.query.since ? parseInt(req.query.since) : null;
+      let query = admin.firestore().collection('complaints').orderBy('updatedAt', 'desc');
+      if (since) {
+        const sinceTimestamp = admin.firestore.Timestamp.fromMillis(since);
+        query = query.where('updatedAt', '>', sinceTimestamp);
+      }
+      const snapshot = await query.get();
       const complaints = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       sendSuccess(res, { complaints });
     } catch (error) {
@@ -417,7 +423,7 @@ sendSuccess(res, { token });
 
       const { cancelEscalation } = require('../services/schedulerService');
     cancelEscalation(complaintId);
-    await ref.update({ adminHandling: true, adminHandledAt: admin.firestore.Timestamp.now() });
+   await ref.update({ adminHandling: true, adminHandledAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() });
 
       const complaint = snap.data();
       if (complaint.submittedBy) {
@@ -458,7 +464,7 @@ sendSuccess(res, { token });
 
       const resolvedAt = admin.firestore.Timestamp.now();
 
-  await ref.update({
+await ref.update({
         status: 'completed',
         flagResolved: true,
         flagResolvedBy: 'admin',
@@ -466,6 +472,7 @@ sendSuccess(res, { token });
         completedAt: resolvedAt,
         hodResolutionEmailSent: true,
         ratingDisabled: true,
+        updatedAt: resolvedAt,
       });
 
       const complaint = { id: complaintId, ...snap.data(), flagResolvedAt: resolvedAt, flagResolvedBy: 'admin' };

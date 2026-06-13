@@ -81,14 +81,60 @@ const post = async (req, res) => {
 const feed = async (req, res) => {
   try {
     const uid = req.user.uid;
+    const since = req.query.since ? parseInt(req.query.since) : null;
+
+if (since) {
+      const sinceTimestamp = admin.firestore.Timestamp.fromMillis(since);
+      // Fetch docs updated since `since` OR posted since `since`
+      // (old docs don't have updatedAt, so we check both)
+    const [byUpdated, byPosted, byDeleted] = await Promise.all([
+        admin.firestore()
+          .collection('lost_reports')
+          .where('status', 'in', ['active', 'found'])
+          .where('updatedAt', '>', sinceTimestamp)
+          .orderBy('updatedAt', 'desc')
+          .get(),
+        admin.firestore()
+          .collection('lost_reports')
+          .where('status', 'in', ['active', 'found'])
+          .where('postedAt', '>', sinceTimestamp)
+          .orderBy('postedAt', 'desc')
+          .get(),
+        admin.firestore()
+          .collection('lost_reports')
+          .where('status', '==', 'deleted')
+          .where('updatedAt', '>', sinceTimestamp)
+          .orderBy('updatedAt', 'desc')
+          .get(),
+      ]);
+      const seen = new Set();
+      const items = [];
+      const deletedIds = [];
+      for (const doc of byDeleted.docs) {
+        deletedIds.push(doc.id);
+      }
+      for (const doc of [...byUpdated.docs, ...byPosted.docs]) {
+        if (seen.has(doc.id)) continue;
+        seen.add(doc.id);
+        items.push({
+          id: doc.id,
+          ...doc.data(),
+          postedAt: doc.data().postedAt?.toMillis?.() ?? doc.data().postedAt ?? null,
+          isMyPost: doc.data().postedBy?.uid === uid,
+        });
+      }
+      return sendSuccess(res, { items, deletedIds, nextCursor: null, hasMore: false });
+    }
+
     const limit = parseInt(req.query.limit) || 10;
     const after = req.query.after || null;
 
-    let q = admin.firestore()
+ let q = admin.firestore()
       .collection('lost_reports')
       .where('status', 'in', ['active', 'found'])
       .orderBy('postedAt', 'desc')
       .limit(limit);
+    // (soft-deleted docs have status='deleted' so they're already excluded by the where clause)
 
     if (after) {
       const cursorDoc = await admin.firestore().collection('lost_reports').doc(after).get();
@@ -96,16 +142,13 @@ const feed = async (req, res) => {
     }
 
     const snapshot = await q.get();
-
     const items = snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data(),
       postedAt: doc.data().postedAt?.toMillis?.() ?? doc.data().postedAt ?? null,
       isMyPost: doc.data().postedBy?.uid === uid,
     }));
-
     const lastDoc = snapshot.docs[snapshot.docs.length - 1];
-
     sendSuccess(res, {
       items,
       nextCursor: snapshot.docs.length === limit ? lastDoc.id : null,
@@ -178,7 +221,8 @@ const deleteReport = async (req, res) => {
       return sendError(res, 'Only the owner can delete this report.', 403);
     }
 
-    await ref.delete();
+    // Soft-delete: mark as deleted so updatedAt changes and hash invalidates immediately
+    await ref.update({ status: 'deleted', updatedAt: admin.firestore.Timestamp.now() });
 
     sendSuccess(res, { message: 'Report deleted.' });
   } catch (error) {
