@@ -274,4 +274,24 @@ const claims = async (req, res) => {
   }
 };
 
-module.exports = { post, feed, handover, myPosts, claims };
+const deletePost = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const uid = req.user.uid;
+
+    const ref = admin.firestore().collection('lostFound').doc(id);
+    const snap = await ref.get();
+
+    if (!snap.exists) return sendError(res, 'Item not found.', 404);
+    if (snap.data().postedBy !== uid) return sendError(res, 'Only the owner can delete this post.', 403);
+    if (snap.data().status === 'handed_over') return sendError(res, 'Cannot delete a handed over item.', 400);
+
+    await ref.delete();
+
+    sendSuccess(res, { message: 'Post deleted successfully.' });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
+module.exports = { post, feed, handover, myPosts, claims, deletePost };

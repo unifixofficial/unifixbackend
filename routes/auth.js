@@ -14,6 +14,7 @@ const {
   validateResetOtp, login, changePassword, updateProfile,
   logoutAllDevices, deleteAccount, reportSecurityIssue,
   requestIdCardUpdate, myProfile, savePushToken, reportRagging,
+  notifyStaffSignup,
 } = require('../controllers/authController');
 
 router.post('/signup', authLimiter, validate(signupSchema), signup);
@@ -32,5 +33,6 @@ router.post('/request-idcard-update', verifyToken, requestIdCardUpdate);
 router.get('/my-profile', verifyToken, myProfile);
 router.post('/save-push-token', verifyToken, validate(savePushTokenSchema), savePushToken);
 router.post('/report-ragging', verifyToken, validate(raggingSchema), reportRagging);
+router.post('/notify-staff-signup', verifyToken, notifyStaffSignup);
 
 module.exports = router;

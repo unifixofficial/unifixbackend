@@ -181,8 +181,24 @@ if (type === 'new_lost_found') {
     return `unifix://lost-and-found?openTab=lost-history`;
   }
 
-  if (type === 'new_lost_report') {
+if (type === 'new_lost_report') {
     return `unifix://lost-and-found?openTab=lostreports`;
+  }
+
+  if (type === 'new_staff_signup') {
+    return `unifix://admin/maintenance`;
+  }
+
+  if (type === 'new_idcard_request') {
+    return `unifix://admin/idcards`;
+  }
+
+  if (type === 'new_deletion_request') {
+    return `unifix://admin/deletions`;
+  }
+
+  if (type === 'new_security_issue') {
+    return `unifix://admin/security`;
   }
 
   return null;
@@ -190,6 +206,15 @@ if (type === 'new_lost_found') {
 
 const extractTokens = (data) => {
   const tokens = [];
+  const docUid = data.uid || null;
+  const tokenUid = data.tokenUid || null;
+
+  // If tokenUid exists and doesn't match docUid — token belongs to a different
+  // user who last logged in on this device. Skip it to prevent cross-user notifications.
+  if (tokenUid && docUid && tokenUid !== docUid) {
+    logger.warn('[Notification] Skipping stale token — tokenUid mismatch', { docUid, tokenUid });
+    return [];
+  }
 
   if (Array.isArray(data.pushToken)) {
     data.pushToken.forEach(t => {
@@ -197,7 +222,7 @@ const extractTokens = (data) => {
         tokens.push(t);
       }
     });
-  } else if (data.pushToken && typeof data.pushToken === 'string' && 
+  } else if (data.pushToken && typeof data.pushToken === 'string' &&
     (data.pushToken.startsWith('ExponentPushToken') || data.pushToken.length > 50)) {
     tokens.push(data.pushToken);
   }
@@ -218,7 +243,6 @@ const extractTokens = (data) => {
 
   return [...new Set(tokens)];
 };
-
 const getAllUserTokens = async (db, excludeUid = null) => {
   const snapshot = await db.collection('users').get();
   const tokens = [];

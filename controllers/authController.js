@@ -4,6 +4,7 @@ const { generateOTP, storeOTPInFirestore, verifyOTPFromFirestore, deleteOTPFromF
 const { sendOTPEmail } = require('../services/emailService');
 const { sendSuccess, sendError } = require('../utils/response');
 const logger = require('../services/logger');
+const { sendPushNotification, getTokensByRole } = require('../services/notificationService');
 
 const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY;
 
@@ -287,7 +288,7 @@ const deleteAccount = async (req, res) => {
         return sendError(res, 'Deletion request already submitted and pending review', 400);
       }
 
-      await admin.firestore().collection('deletionRequests').add({
+ const delRef = await admin.firestore().collection('deletionRequests').add({
         uid,
         email: userData.email,
         fullName: userData.fullName,
@@ -295,6 +296,12 @@ const deleteAccount = async (req, res) => {
         designation: userData.designation || null,
         status: 'pending',
         requestedAt: admin.firestore.Timestamp.now(),
+      });
+
+      const adminTokens = await getTokensByRole(admin.firestore(), ['admin']);
+      await sendPushNotification(adminTokens, 'New Deletion Request', `${userData.fullName} (staff) requested account deletion.`, {
+        type: 'new_deletion_request',
+        requestId: delRef.id,
       });
 
       return sendSuccess(res, {
@@ -329,15 +336,22 @@ const reportSecurityIssue = async (req, res) => {
     if (!userDoc.exists) return sendError(res, 'User not found', 404);
 
     const userData = userDoc.data();
-    await admin.firestore().collection('securityIssues').add({
+const secRef = await admin.firestore().collection('securityIssues').add({
       uid,
       email: userData.email,
       fullName: userData.fullName,
+      phone: userData.phone ?? null,
       role: userData.role,
       issueType,
       description: description.trim(),
       status: 'open',
       reportedAt: admin.firestore.Timestamp.now(),
+    });
+
+    const adminTokens = await getTokensByRole(admin.firestore(), ['admin']);
+    await sendPushNotification(adminTokens, 'New Security Issue', `${userData.fullName} reported: ${issueType}`, {
+      type: 'new_security_issue',
+      issueId: secRef.id,
     });
 
     sendSuccess(res, { message: 'Security issue reported successfully. Our team will review it shortly.' });
@@ -369,7 +383,7 @@ const requestIdCardUpdate = async (req, res) => {
       return sendError(res, 'You already have a pending ID card update request', 400);
     }
 
-    await admin.firestore().collection('idCardRequests').add({
+  const idCardRef = await admin.firestore().collection('idCardRequests').add({
       uid,
       email: userData.email,
       fullName: userData.fullName,
@@ -379,6 +393,12 @@ const requestIdCardUpdate = async (req, res) => {
       currentIdCardUrl: userData.studentIdCardUrl || userData.teacherIdCardUrl || null,
       status: 'pending',
       requestedAt: admin.firestore.Timestamp.now(),
+    });
+
+    const adminTokens = await getTokensByRole(admin.firestore(), ['admin']);
+    await sendPushNotification(adminTokens, 'New ID Card Request', `${userData.fullName} requested an ID card update.`, {
+      type: 'new_idcard_request',
+      requestId: idCardRef.id,
     });
 
     sendSuccess(res, { message: 'ID card update request submitted. Admin will review it shortly.' });
@@ -416,11 +436,11 @@ const savePushToken = async (req, res) => {
       return sendError(res, 'Invalid push token', 400);
     }
 
-    await admin.firestore().collection('users').doc(uid).update({
+  await admin.firestore().collection('users').doc(uid).update({
       expoPushToken,
+      tokenUid: uid,
       updatedAt: admin.firestore.Timestamp.now(),
     });
-
     sendSuccess(res, { message: 'Push token saved successfully.' });
   } catch (error) {
     sendError(res, error.message);
@@ -494,8 +514,29 @@ logger.info('[Auth] Ragging report submitted', { uid, isAnonymous });
   }
 };
 
+const notifyStaffSignup = async (req, res) => {
+  try {
+    const uid = req.user?.uid || req.uid;
+    const userDoc = await admin.firestore().collection('users').doc(uid).get();
+    if (!userDoc.exists) return sendError(res, 'User not found', 404);
+
+    const userData = userDoc.data();
+    if (userData.role !== 'staff') return sendSuccess(res, { message: 'Not staff, skipped' });
+
+    const adminTokens = await getTokensByRole(admin.firestore(), ['admin']);
+    await sendPushNotification(adminTokens, 'New Staff Signup', `${userData.fullName} has registered and needs approval.`, {
+      type: 'new_staff_signup',
+    });
+
+    sendSuccess(res, { message: 'Admins notified' });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
 module.exports = {
   signup,
+  notifyStaffSignup,
   verifyOtp,
   resendOtp,
   forgotPassword,
