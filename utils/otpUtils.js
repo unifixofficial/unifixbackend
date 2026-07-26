@@ -1,56 +1,65 @@
-const admin = require('../config/firebase');
+const prisma = require('../config/prisma');
 
 const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-const storeOTPInFirestore = async (email, otp, type) => {
+const storeOTP = async (email, otp, type) => {
   const otpType = type || 'email-verification';
-  const expiryTime = new Date(Date.now() + 10 * 60 * 1000);
-  await admin.firestore().collection('otps').doc(email).set({
-    otp: String(otp),
-    type: otpType,
-    expiresAt: admin.firestore.Timestamp.fromDate(expiryTime),
-    createdAt: admin.firestore.Timestamp.now(),
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+  await prisma.otp.upsert({
+    where: { email_type: { email, type: otpType } },
+    update: {
+      otp: String(otp),
+      expiresAt,
+      used: false,
+      createdAt: new Date(),
+    },
+    create: {
+      email,
+      otp: String(otp),
+      type: otpType,
+      expiresAt,
+    },
   });
 };
 
-const verifyOTPFromFirestore = async (email, otp, type) => {
+const verifyOTP = async (email, otp, type) => {
   const otpType = type || 'email-verification';
   if (!email || !otp) return false;
-  try {
-    const otpRef = admin.firestore().collection('otps').doc(email);
-    let isValid = false;
 
-    await admin.firestore().runTransaction(async (transaction) => {
-      const otpDoc = await transaction.get(otpRef);
-      if (!otpDoc.exists) return;
-      const otpData = otpDoc.data();
-      if (!otpData?.otp || !otpData?.type || !otpData?.expiresAt) return;
-      if (otpData.type !== otpType) return;
-      if (String(otpData.otp).trim() !== String(otp).trim()) return;
-      if (new Date() > otpData.expiresAt.toDate()) return;
-      // Delete inside transaction — second request will find no doc
-      transaction.delete(otpRef);
-      isValid = true;
+  try {
+    const record = await prisma.otp.findUnique({
+      where: { email_type: { email, type: otpType } },
     });
 
-    return isValid;
+    if (!record) return false;
+    if (record.used) return false;
+    if (String(record.otp).trim() !== String(otp).trim()) return false;
+    if (new Date() > record.expiresAt) return false;
+
+    await prisma.otp.delete({
+      where: { email_type: { email, type: otpType } },
+    });
+
+    return true;
   } catch {
     return false;
   }
 };
 
-const deleteOTPFromFirestore = async (email) => {
+const deleteOTP = async (email, type) => {
   if (!email) return;
   try {
-    await admin.firestore().collection('otps').doc(email).delete();
+    const otpType = type || 'email-verification';
+    await prisma.otp.deleteMany({ where: { email, type: otpType } });
   } catch {}
 };
 
 module.exports = {
   generateOTP,
-  storeOTPInFirestore,
-  verifyOTPFromFirestore,
-  deleteOTPFromFirestore,
+  storeOTP,
+  verifyOTP,
+  deleteOTP,
 };

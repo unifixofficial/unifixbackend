@@ -1,18 +1,31 @@
-const admin = require('../config/firebase');
+const prisma = require('../config/prisma');
 const { sendSuccess, sendError } = require('../utils/response');
-
-const getSeconds = (ts) => {
-  if (!ts) return null;
-  if (typeof ts.toMillis === 'function') return ts.toMillis() / 1000;
-  if (typeof ts._seconds === 'number') return ts._seconds;
-  if (typeof ts.seconds === 'number') return ts.seconds;
-  return null;
-};
 
 const getAnalytics = async (req, res) => {
   try {
-    const snapshot = await admin.firestore().collection('complaints').get();
-    const complaints = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const [complaints, staffUsers] = await Promise.all([
+      prisma.complaint.findMany({
+        select: {
+          id: true,
+          category: true,
+          status: true,
+          flagged: true,
+          createdAt: true,
+          completedAt: true,
+          assignedToId: true,
+        },
+      }),
+      prisma.user.findMany({
+        where: { role: 'staff', verificationStatus: 'approved' },
+        select: {
+          id: true,
+          fullName: true,
+          designation: true,
+          avgRating: true,
+          ratingCount: true,
+        },
+      }),
+    ]);
 
     const total = complaints.length;
 
@@ -26,9 +39,9 @@ const getAnalytics = async (req, res) => {
     let avgResolutionMinutes = null;
     if (completed.length > 0) {
       const totalMs = completed.reduce((sum, c) => {
-        const start = getSeconds(c.createdAt);
-        const end = getSeconds(c.completedAt);
-        return start && end ? sum + (end - start) * 1000 : sum;
+        const start = c.createdAt instanceof Date ? c.createdAt.getTime() : null;
+        const end = c.completedAt instanceof Date ? c.completedAt.getTime() : null;
+        return start && end ? sum + (end - start) : sum;
       }, 0);
       avgResolutionMinutes = Math.round(totalMs / completed.length / 60000);
     }
@@ -36,29 +49,20 @@ const getAnalytics = async (req, res) => {
     const flagged = complaints.filter(c => c.flagged);
     const escalationRate = total > 0 ? ((flagged.length / total) * 100).toFixed(1) : '0.0';
 
-    const staffSnap = await admin.firestore()
-      .collection('users')
-      .where('role', '==', 'staff')
-      .where('verificationStatus', '==', 'approved')
-      .get();
-
-    const staffPerformance = staffSnap.docs.map(doc => {
-      const d = doc.data();
-      return {
-        uid: doc.id,
-        fullName: d.fullName || '',
-        designation: d.designation || '',
-        avgRating: d.avgRating || null,
-        ratingCount: d.ratingCount || 0,
-        completedComplaints: complaints.filter(c => c.assignedTo === doc.id && c.status === 'completed').length,
-      };
-    });
+    const staffPerformance = staffUsers.map(s => ({
+      uid: s.id,
+      fullName: s.fullName || '',
+      designation: s.designation || '',
+      avgRating: s.avgRating || null,
+      ratingCount: s.ratingCount || 0,
+      completedComplaints: complaints.filter(c => c.assignedToId === s.id && c.status === 'completed').length,
+    }));
 
     const statusBreakdown = {
       pending: complaints.filter(c => c.status === 'pending').length,
       assigned: complaints.filter(c => c.status === 'assigned').length,
       in_progress: complaints.filter(c => c.status === 'in_progress').length,
-      completed: complaints.filter(c => c.status === 'completed').length,
+      completed: completed.length,
       rejected: complaints.filter(c => c.status === 'rejected').length,
     };
 
@@ -76,4 +80,4 @@ const getAnalytics = async (req, res) => {
   }
 };
 
-module.exports = { getAnalytics };  
+module.exports = { getAnalytics };

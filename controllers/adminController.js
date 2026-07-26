@@ -1,81 +1,63 @@
-const admin = require('../config/firebase');
-const axios = require('axios');
+const argon2 = require('argon2');
+const crypto = require('crypto');
+const prisma = require('../config/prisma');
+const { signAccessToken, signRefreshToken, getRefreshExpiry } = require('../utils/jwt');
 const { sendRejectionEmail, sendIdCardRejectionEmail } = require('../services/emailService');
-  const { sendSuccess, sendError } = require('../utils/response');
-  const { createAuditLog } = require('../services/auditLogService');
-  const logger = require('../services/logger');
+const { sendSuccess, sendError } = require('../utils/response');
+const { createAuditLog } = require('../services/auditLogService');
+const logger = require('../services/logger');
 
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return sendError(res, 'Email and password required', 400);
 
-  let signInData;
-try {
-  const signInRes = await axios.post(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${process.env.FIREBASE_API_KEY}`,
-    { email, password, returnSecureToken: true }
-  );
-  signInData = signInRes.data;
-} catch (firebaseError) {
-  const code = firebaseError.response?.data?.error?.message || '';
-  
-  logger.error('[Admin] Firebase auth failed', { code, full: firebaseError.response?.data });
-      if (code.includes('TOO_MANY_ATTEMPTS')) {
-        return sendError(res, 'Too many attempts. Please try again later.', 400);
-      }
-      return sendError(res, 'Invalid admin credentials', 401);
-    }
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user || user.role !== 'admin') return sendError(res, 'Invalid admin credentials', 401);
+    if (user.accountStatus !== 'active') return sendError(res, 'Account suspended', 403);
 
-    const userRecord = await admin.auth().getUserByEmail(email);
-    const userDoc = await admin.firestore().collection('users').doc(userRecord.uid).get();
-    
-if (!userDoc.exists || userDoc.data()?.role !== 'admin') {
-  return sendError(res, 'Invalid admin credentials', 401);
-}
+    const valid = await argon2.verify(user.passwordHash, password);
+    if (!valid) return sendError(res, 'Invalid admin credentials', 401);
 
-   const idTokenResponse = await axios.post(
-  `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${process.env.FIREBASE_API_KEY}`,
-  { email, password, returnSecureToken: true }
-);
-const token = idTokenResponse.data.idToken;
+    const tokenPayload = { uid: user.id, role: user.role, tokenVersion: user.tokenVersion };
+    const token = signAccessToken(tokenPayload);
+    const refreshToken = signRefreshToken({ uid: user.id });
 
-sendSuccess(res, { token });
+    await prisma.$transaction([
+      prisma.refreshToken.create({
+        data: { userId: user.id, token: refreshToken, expiresAt: getRefreshExpiry() },
+      }),
+      prisma.user.update({ where: { id: user.id }, data: { lastLogin: new Date() } }),
+    ]);
+
+    sendSuccess(res, { token, refreshToken });
   } catch (error) {
     logger.error('[Admin] login failed', { error: error.message });
     sendError(res, error.message);
   }
 };
 
-  const getPendingStaff = async (req, res) => {
-    try {
-      const snapshot = await admin.firestore()
-        .collection('users')
-        .where('role', '==', 'staff')
-        .where('verificationStatus', '==', 'pending')
-        .get();
-      const staff = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      sendSuccess(res, { staff });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
-
- const crypto = require('crypto');
+const getPendingStaff = async (req, res) => {
+  try {
+    const staff = await prisma.user.findMany({
+      where: { role: 'staff', verificationStatus: 'pending' },
+    });
+    sendSuccess(res, { staff });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
 
 const getAllStaff = async (req, res) => {
   try {
-    const snapshot = await admin.firestore()
-      .collection('users')
-      .where('role', '==', 'staff')
-      .get();
-    const staff = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const staff = await prisma.user.findMany({
+      where: { role: 'staff' },
+      orderBy: { createdAt: 'desc' },
+    });
 
-    // Compute hash from ids + verificationStatus only (fast, stable)
-    const hashInput = staff.map(s => `${s.id}:${s.verificationStatus}:${s.updatedAt?._seconds ?? 0}`).join('|');
+    const hashInput = staff.map(s => `${s.id}:${s.verificationStatus}:${s.updatedAt?.getTime() ?? 0}`).join('|');
     const hash = crypto.createHash('md5').update(hashInput).digest('hex');
 
-    // If client already has this hash → return 304-style response (no data)
     const clientHash = req.headers['x-data-hash'];
     if (clientHash && clientHash === hash) {
       return res.status(200).json({ upToDate: true, hash });
@@ -87,139 +69,123 @@ const getAllStaff = async (req, res) => {
   }
 };
 
-  const getStaffById = async (req, res) => {
-    try {
-      const { uid } = req.params;
-      const docSnap = await admin.firestore().collection('users').doc(uid).get();
-      if (!docSnap.exists) return sendError(res, 'Staff not found', 404);
-      sendSuccess(res, { staff: { id: docSnap.id, ...docSnap.data() } });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
+const getStaffById = async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const staff = await prisma.user.findUnique({ where: { id: uid } });
+    if (!staff) return sendError(res, 'Staff not found', 404);
+    sendSuccess(res, { staff: { id: staff.id, ...staff } });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
 
-  const approveStaff = async (req, res) => {
-    try {
-      const { uid } = req.body;
-      if (!uid) return sendError(res, 'UID required', 400);
-      const docSnap = await admin.firestore().collection('users').doc(uid).get();
-      if (!docSnap.exists) return sendError(res, 'Staff not found', 404);
-  await admin.firestore().collection('users').doc(uid).update({
-        verificationStatus: 'approved',
-        rejectionMessage: null,
-        approvedAt: admin.firestore.Timestamp.now(),
-      });
-      await createAuditLog({
-        action: 'staff_approved',
-        performedBy: 'admin',
-        performedByRole: 'admin',
-        targetId: uid,
-        targetType: 'user',
-      });
-      logger.info('[Admin] Staff approved', { uid });
-      sendSuccess(res, { message: 'Staff approved successfully' });
-    } catch (error) {
-      logger.error('[Admin] approveStaff failed', { error: error.message });
-      sendError(res, error.message);
-    }
-  };
+const approveStaff = async (req, res) => {
+  try {
+    const { uid } = req.body;
+    if (!uid) return sendError(res, 'UID required', 400);
+    const staff = await prisma.user.findUnique({ where: { id: uid } });
+    if (!staff) return sendError(res, 'Staff not found', 404);
 
-  const rejectStaff = async (req, res) => {
-    try {
-      const { uid, rejectionMessage } = req.body;
-      if (!uid || !rejectionMessage) return sendError(res, 'UID and rejection message required', 400);
-      const docSnap = await admin.firestore().collection('users').doc(uid).get();
-      if (!docSnap.exists) return sendError(res, 'Staff not found', 404);
-      const staffData = docSnap.data();
-      await admin.firestore().collection('users').doc(uid).update({
-        verificationStatus: 'rejected',
-        rejectionMessage: rejectionMessage.trim(),
-        profileCompleted: false,
-        rejectedAt: admin.firestore.Timestamp.now(),
-      });
-  try { await sendRejectionEmail(staffData.email, staffData.fullName, rejectionMessage.trim()); } catch {}
-      await createAuditLog({
-        action: 'staff_rejected',
-        performedBy: 'admin',
-        performedByRole: 'admin',
-        targetId: uid,
-        targetType: 'user',
-        metadata: { rejectionMessage: rejectionMessage.trim() },
-      });
-      logger.info('[Admin] Staff rejected', { uid });
-      sendSuccess(res, { message: 'Staff rejected and notified' });
-    } catch (error) {
-      logger.error('[Admin] rejectStaff failed', { error: error.message });
-      sendError(res, error.message);
-    }
-  };
+    await prisma.user.update({
+      where: { id: uid },
+      data: { verificationStatus: 'approved', rejectionMessage: null, approvedAt: new Date() },
+    });
 
-  const getStats = async (req, res) => {
-    try {
-      const [pendingSnap, approvedSnap, rejectedSnap, studentSnap, teacherSnap, complaintsSnap, idCardSnap, deletionSnap, securitySnap] =
-        await Promise.all([
-          admin.firestore().collection('users').where('role', '==', 'staff').where('verificationStatus', '==', 'pending').get(),
-          admin.firestore().collection('users').where('role', '==', 'staff').where('verificationStatus', '==', 'approved').get(),
-          admin.firestore().collection('users').where('role', '==', 'staff').where('verificationStatus', '==', 'rejected').get(),
-          admin.firestore().collection('users').where('role', '==', 'student').get(),
-          admin.firestore().collection('users').where('role', '==', 'teacher').get(),
-          admin.firestore().collection('complaints').get(),
-          admin.firestore().collection('idCardRequests').where('status', '==', 'pending').get(),
-          admin.firestore().collection('deletionRequests').where('status', '==', 'pending').get(),
-          admin.firestore().collection('securityIssues').where('status', '==', 'open').get(),
-        ]);
+    await createAuditLog({ action: 'staff_approved', performedBy: req.admin?.uid, performedByRole: 'admin', targetId: uid, targetType: 'user' });
+    logger.info('[Admin] Staff approved', { uid });
+    sendSuccess(res, { message: 'Staff approved successfully' });
+  } catch (error) {
+    logger.error('[Admin] approveStaff failed', { error: error.message });
+    sendError(res, error.message);
+  }
+};
 
-      const complaints = complaintsSnap.docs.map(d => d.data());
-      const complaintStats = {
-        total: complaints.length,
-        pending: complaints.filter(c => c.status === 'pending').length,
-        assigned: complaints.filter(c => c.status === 'assigned').length,
-        in_progress: complaints.filter(c => c.status === 'in_progress').length,
-        completed: complaints.filter(c => c.status === 'completed').length,
-        rejected: complaints.filter(c => c.status === 'rejected').length,
-      };
+const rejectStaff = async (req, res) => {
+  try {
+    const { uid, rejectionMessage } = req.body;
+    if (!uid || !rejectionMessage) return sendError(res, 'UID and rejection message required', 400);
 
-      sendSuccess(res, {
-        stats: {
-          pending: pendingSnap.size,
-          approved: approvedSnap.size,
-          rejected: rejectedSnap.size,
-          total: pendingSnap.size + approvedSnap.size + rejectedSnap.size,
-          students: studentSnap.size,
-          teachers: teacherSnap.size,
-          complaints: complaintStats,
-          pendingIdCardRequests: idCardSnap.size,
-          pendingDeletionRequests: deletionSnap.size,
-          openSecurityIssues: securitySnap.size,
-        },
-      });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
+    const staff = await prisma.user.findUnique({ where: { id: uid } });
+    if (!staff) return sendError(res, 'Staff not found', 404);
+
+    await prisma.user.update({
+      where: { id: uid },
+      data: { verificationStatus: 'rejected', rejectionMessage: rejectionMessage.trim(), profileCompleted: false, rejectedAt: new Date() },
+    });
+
+    try { await sendRejectionEmail(staff.email, staff.fullName, rejectionMessage.trim()); } catch {}
+
+    await createAuditLog({ action: 'staff_rejected', performedBy: req.admin?.uid, performedByRole: 'admin', targetId: uid, targetType: 'user', metadata: { rejectionMessage: rejectionMessage.trim() } });
+    logger.info('[Admin] Staff rejected', { uid });
+    sendSuccess(res, { message: 'Staff rejected and notified' });
+  } catch (error) {
+    logger.error('[Admin] rejectStaff failed', { error: error.message });
+    sendError(res, error.message);
+  }
+};
+
+const getStats = async (req, res) => {
+  try {
+    const [pending, approved, rejected, students, teachers, complaints, idCards, deletions, security] = await Promise.all([
+      prisma.user.count({ where: { role: 'staff', verificationStatus: 'pending' } }),
+      prisma.user.count({ where: { role: 'staff', verificationStatus: 'approved' } }),
+      prisma.user.count({ where: { role: 'staff', verificationStatus: 'rejected' } }),
+      prisma.user.count({ where: { role: 'student' } }),
+      prisma.user.count({ where: { role: 'teacher' } }),
+      prisma.complaint.groupBy({ by: ['status'], _count: { status: true } }),
+      prisma.idCardRequest.count({ where: { status: 'pending' } }),
+      prisma.deletionRequest.count({ where: { status: 'pending' } }),
+      prisma.securityIssue.count({ where: { status: 'open' } }),
+    ]);
+
+    const complaintStats = { total: 0, pending: 0, assigned: 0, in_progress: 0, completed: 0, rejected: 0 };
+    complaints.forEach(g => {
+      complaintStats[g.status] = g._count.status;
+      complaintStats.total += g._count.status;
+    });
+
+    sendSuccess(res, {
+      stats: {
+        pending, approved, rejected,
+        total: pending + approved + rejected,
+        students, teachers,
+        complaints: complaintStats,
+        pendingIdCardRequests: idCards,
+        pendingDeletionRequests: deletions,
+        openSecurityIssues: security,
+      },
+    });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
 
 const getAllComplaints = async (req, res) => {
-    try {
-      const since = req.query.since ? parseInt(req.query.since) : null;
-      let query = admin.firestore().collection('complaints').orderBy('updatedAt', 'desc');
-      if (since) {
-        const sinceTimestamp = admin.firestore.Timestamp.fromMillis(since);
-        query = query.where('updatedAt', '>', sinceTimestamp);
-      }
-      const snapshot = await query.get();
-      const complaints = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      sendSuccess(res, { complaints });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
+  try {
+    const since = req.query.since ? new Date(parseInt(req.query.since)) : null;
+    const complaints = await prisma.complaint.findMany({
+      where: since ? { updatedAt: { gt: since } } : {},
+      orderBy: { updatedAt: 'desc' },
+    });
+    sendSuccess(res, { complaints });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
 
 const getAllUsers = async (req, res) => {
   try {
-    const snapshot = await admin.firestore().collection('users').get();
-    const users = snapshot.docs.map(doc => {
-      const { idCardBase64, certificateBase64, ...rest } = doc.data();
-      return { id: doc.id, ...rest }; // studentIdCardUrl / teacherIdCardUrl still included
+    const users = await prisma.user.findMany({
+      select: {
+        id: true, fullName: true, email: true, phone: true, role: true,
+        gender: true, profileCompleted: true, verificationStatus: true,
+        rejectionMessage: true, year: true, branch: true, rollNumber: true,
+        studentIdCardUrl: true, studentIdCardName: true, department: true,
+        teacherIdCardUrl: true, teacherIdCardName: true, employeeId: true,
+        designation: true, avgRating: true, ratingCount: true,
+        createdAt: true, lastLogin: true, accountStatus: true,
+      },
     });
     sendSuccess(res, { users });
   } catch (error) {
@@ -227,282 +193,219 @@ const getAllUsers = async (req, res) => {
   }
 };
 
-  const getUserIdCard = async (req, res) => {
-    try {
-      const { uid } = req.params;
-      const docSnap = await admin.firestore().collection('users').doc(uid).get();
-      if (!docSnap.exists) return sendError(res, 'User not found', 404);
-      const data = docSnap.data();
-      sendSuccess(res, {
-        idCard: {
-          role: data.role,
-          fullName: data.fullName,
-          studentIdCardUrl: data.studentIdCardUrl || null,
-          studentIdCardName: data.studentIdCardName || null,
-          teacherIdCardUrl: data.teacherIdCardUrl || null,
-          teacherIdCardName: data.teacherIdCardName || null,
-        },
-      });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
-
-  const getIdCardRequests = async (req, res) => {
-    try {
-      const snapshot = await admin.firestore().collection('idCardRequests').orderBy('requestedAt', 'desc').get();
-      const requests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      sendSuccess(res, { requests });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
-
-  const approveIdCard = async (req, res) => {
-    try {
-      const { requestId } = req.body;
-      if (!requestId) return sendError(res, 'Request ID required', 400);
-
-      const reqDoc = await admin.firestore().collection('idCardRequests').doc(requestId).get();
-      if (!reqDoc.exists) return sendError(res, 'Request not found', 404);
-
-      const reqData = reqDoc.data();
-      if (reqData.status !== 'pending') return sendError(res, 'Request already processed', 400);
-
-      const updateField = reqData.role === 'student' ? 'studentIdCardUrl' : 'teacherIdCardUrl';
-      const updateNameField = reqData.role === 'student' ? 'studentIdCardName' : 'teacherIdCardName';
-
-      await admin.firestore().collection('users').doc(reqData.uid).update({
-        [updateField]: reqData.newIdCardUrl,
-        [updateNameField]: reqData.newIdCardName || null,
-        idCardUpdatedAt: admin.firestore.Timestamp.now(),
-      });
-
-      await admin.firestore().collection('idCardRequests').doc(requestId).update({
-        status: 'approved',
-        processedAt: admin.firestore.Timestamp.now(),
-      });
-
-      sendSuccess(res, { message: 'ID card approved and updated successfully' });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
-
-  const rejectIdCard = async (req, res) => {
-    try {
-      const { requestId, reason } = req.body;
-      if (!requestId) return sendError(res, 'Request ID required', 400);
-
-      const reqDoc = await admin.firestore().collection('idCardRequests').doc(requestId).get();
-      if (!reqDoc.exists) return sendError(res, 'Request not found', 404);
-
-      const reqData = reqDoc.data();
-      if (reqData.status !== 'pending') return sendError(res, 'Request already processed', 400);
-
-      await admin.firestore().collection('idCardRequests').doc(requestId).update({
-        status: 'rejected',
-        rejectionReason: reason || 'Not specified',
-        processedAt: admin.firestore.Timestamp.now(),
-      });
-
-      try { await sendIdCardRejectionEmail(reqData.email, reqData.fullName, reason || 'Not specified'); } catch {}
-
-      sendSuccess(res, { message: 'ID card request rejected' });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
-
-  const getDeletionRequests = async (req, res) => {
-    try {
-      const [staffPending, deletionLogs] = await Promise.all([
-        admin.firestore().collection('deletionRequests').orderBy('requestedAt', 'desc').get(),
-        admin.firestore().collection('deletionLogs').orderBy('deletedAt', 'desc').limit(50).get(),
-      ]);
-      sendSuccess(res, {
-        staffRequests: staffPending.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-        userDeletions: deletionLogs.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-      });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
-
-  const approveDeletion = async (req, res) => {
-    try {
-      const { requestId } = req.body;
-      if (!requestId) return sendError(res, 'Request ID required', 400);
-
-      const reqDoc = await admin.firestore().collection('deletionRequests').doc(requestId).get();
-      if (!reqDoc.exists) return sendError(res, 'Request not found', 404);
-
-      const reqData = reqDoc.data();
-      if (reqData.status !== 'pending') return sendError(res, 'Request already processed', 400);
-
-     await admin.firestore().collection('deletionRequests').doc(requestId).update({
-    status: 'approved',
-    processedAt: admin.firestore.Timestamp.now(),
-  });
-
-  // Log the deletion before deleting user
-  await admin.firestore().collection('deletionLogs').add({
-    uid: reqData.uid,
-    email: reqData.email,
-    fullName: reqData.fullName,
-    role: reqData.role,
-    designation: reqData.designation ?? null,
-    deletedBy: 'admin',
-    deletedAt: admin.firestore.Timestamp.now(),
-  });
-
-  await admin.firestore().collection('users').doc(reqData.uid).delete();
-  try { await admin.auth().deleteUser(reqData.uid); } catch {}
-
-  sendSuccess(res, { message: 'Staff account deleted successfully' });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
-
-  const rejectDeletion = async (req, res) => {
-    try {
-      const { requestId, reason } = req.body;
-      if (!requestId) return sendError(res, 'Request ID required', 400);
-
-      const reqDoc = await admin.firestore().collection('deletionRequests').doc(requestId).get();
-      if (!reqDoc.exists) return sendError(res, 'Request not found', 404);
-
-      const reqData = reqDoc.data();
-      if (reqData.status !== 'pending') return sendError(res, 'Request already processed', 400);
-
-      await admin.firestore().collection('deletionRequests').doc(requestId).update({
-        status: 'rejected',
-        rejectionReason: reason || 'Not specified',
-        processedAt: admin.firestore.Timestamp.now(),
-      });
-
-      await admin.firestore().collection('users').doc(reqData.uid).update({
-        deletionRequestStatus: 'rejected',
-        deletionRejectionReason: reason || 'Not specified',
-      });
-
-      sendSuccess(res, { message: 'Deletion request rejected' });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
-
-const getSecurityIssues = async (req, res) => {
+const getUserIdCard = async (req, res) => {
   try {
-    const snapshot = await admin.firestore().collection('securityIssues').orderBy('reportedAt', 'desc').get();
-    const issues = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-    // Fetch phone from users collection for issues missing it
-    const enriched = await Promise.all(
-      issues.map(async (issue) => {
-        if (issue.phone) return issue;
-        try {
-          const userDoc = await admin.firestore().collection('users').doc(issue.uid).get();
-          return { ...issue, phone: userDoc.exists ? (userDoc.data().phone ?? null) : null };
-        } catch {
-          return issue;
-        }
-      })
-    );
-
-    sendSuccess(res, { issues: enriched });
+    const { uid } = req.params;
+    const user = await prisma.user.findUnique({
+      where: { id: uid },
+      select: { role: true, fullName: true, studentIdCardUrl: true, studentIdCardName: true, teacherIdCardUrl: true, teacherIdCardName: true },
+    });
+    if (!user) return sendError(res, 'User not found', 404);
+    sendSuccess(res, { idCard: user });
   } catch (error) {
     sendError(res, error.message);
   }
 };
 
-  const resolveSecurityIssue = async (req, res) => {
-    try {
-      const { issueId, resolution } = req.body;
-      if (!issueId) return sendError(res, 'Issue ID required', 400);
+const getIdCardRequests = async (req, res) => {
+  try {
+    const requests = await prisma.idCardRequest.findMany({ orderBy: { requestedAt: 'desc' } });
+    sendSuccess(res, { requests });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
 
-      const issueDoc = await admin.firestore().collection('securityIssues').doc(issueId).get();
-      if (!issueDoc.exists) return sendError(res, 'Issue not found', 404);
+const approveIdCard = async (req, res) => {
+  try {
+    const { requestId } = req.body;
+    if (!requestId) return sendError(res, 'Request ID required', 400);
 
-      await admin.firestore().collection('securityIssues').doc(issueId).update({
-        status: 'resolved',
-        resolution: resolution || 'Resolved by admin',
-        resolvedAt: admin.firestore.Timestamp.now(),
-      });
+    const request = await prisma.idCardRequest.findUnique({ where: { id: requestId } });
+    if (!request) return sendError(res, 'Request not found', 404);
+    if (request.status !== 'pending') return sendError(res, 'Request already processed', 400);
 
-      sendSuccess(res, { message: 'Security issue resolved' });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
+    const updateField = request.role === 'student' ? 'studentIdCardUrl' : 'teacherIdCardUrl';
+    const updateNameField = request.role === 'student' ? 'studentIdCardName' : 'teacherIdCardName';
 
-  const getAllLostFound = async (req, res) => {
-    try {
-      const snapshot = await admin.firestore()
-        .collection('lostFound')
-        .orderBy('createdAt', 'desc')
-        .get();
-      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      sendSuccess(res, { items });
-    } catch (error) {
-      sendError(res, error.message);
-    }
-  };
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: request.userId },
+        data: { [updateField]: request.newIdCardUrl, [updateNameField]: request.newIdCardName || null, idCardUpdatedAt: new Date() },
+      }),
+      prisma.idCardRequest.update({
+        where: { id: requestId },
+        data: { status: 'approved', processedAt: new Date() },
+      }),
+    ]);
 
-  const iwillhandle = async (req, res) => {
-    try {
-      const { complaintId } = req.body;
-      if (!complaintId) return sendError(res, 'Complaint ID required', 400);
+    sendSuccess(res, { message: 'ID card approved and updated successfully' });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
 
-      const ref = admin.firestore().collection('complaints').doc(complaintId);
-      const snap = await ref.get();
-      if (!snap.exists) return sendError(res, 'Complaint not found', 404);
+const rejectIdCard = async (req, res) => {
+  try {
+    const { requestId, reason } = req.body;
+    if (!requestId) return sendError(res, 'Request ID required', 400);
 
-      const { cancelEscalation } = require('../services/schedulerService');
+    const request = await prisma.idCardRequest.findUnique({ where: { id: requestId } });
+    if (!request) return sendError(res, 'Request not found', 404);
+    if (request.status !== 'pending') return sendError(res, 'Request already processed', 400);
+
+    await prisma.idCardRequest.update({
+      where: { id: requestId },
+      data: { status: 'rejected', rejectionReason: reason || 'Not specified', processedAt: new Date() },
+    });
+
+    try { await sendIdCardRejectionEmail(request.email, request.fullName, reason || 'Not specified'); } catch {}
+    sendSuccess(res, { message: 'ID card request rejected' });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
+const getDeletionRequests = async (req, res) => {
+  try {
+    const [staffRequests, userDeletions] = await Promise.all([
+      prisma.deletionRequest.findMany({ orderBy: { requestedAt: 'desc' } }),
+      prisma.deletionLog.findMany({ orderBy: { deletedAt: 'desc' }, take: 50 }),
+    ]);
+    sendSuccess(res, { staffRequests, userDeletions });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
+const approveDeletion = async (req, res) => {
+  try {
+    const { requestId } = req.body;
+    if (!requestId) return sendError(res, 'Request ID required', 400);
+
+    const request = await prisma.deletionRequest.findUnique({ where: { id: requestId } });
+    if (!request) return sendError(res, 'Request not found', 404);
+    if (request.status !== 'pending') return sendError(res, 'Request already processed', 400);
+
+    await prisma.$transaction([
+      prisma.deletionRequest.update({ where: { id: requestId }, data: { status: 'approved', processedAt: new Date() } }),
+      prisma.deletionLog.create({
+        data: { uid: request.userId, email: request.email, fullName: request.fullName, role: request.role, designation: request.designation || null, deletedBy: 'admin' },
+      }),
+      prisma.user.update({ where: { id: request.userId }, data: { accountStatus: 'deleted' } }),
+    ]);
+
+    sendSuccess(res, { message: 'Staff account deleted successfully' });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
+const rejectDeletion = async (req, res) => {
+  try {
+    const { requestId, reason } = req.body;
+    if (!requestId) return sendError(res, 'Request ID required', 400);
+
+    const request = await prisma.deletionRequest.findUnique({ where: { id: requestId } });
+    if (!request) return sendError(res, 'Request not found', 404);
+    if (request.status !== 'pending') return sendError(res, 'Request already processed', 400);
+
+    await prisma.deletionRequest.update({
+      where: { id: requestId },
+      data: { status: 'rejected', rejectionReason: reason || 'Not specified', processedAt: new Date() },
+    });
+
+    sendSuccess(res, { message: 'Deletion request rejected' });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
+const getSecurityIssues = async (req, res) => {
+  try {
+    const issues = await prisma.securityIssue.findMany({ orderBy: { reportedAt: 'desc' } });
+    sendSuccess(res, { issues });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
+const resolveSecurityIssue = async (req, res) => {
+  try {
+    const { issueId, resolution } = req.body;
+    if (!issueId) return sendError(res, 'Issue ID required', 400);
+
+    const issue = await prisma.securityIssue.findUnique({ where: { id: issueId } });
+    if (!issue) return sendError(res, 'Issue not found', 404);
+
+    await prisma.securityIssue.update({
+      where: { id: issueId },
+      data: { status: 'resolved', resolution: resolution || 'Resolved by admin', resolvedAt: new Date() },
+    });
+
+    sendSuccess(res, { message: 'Security issue resolved' });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
+const getAllLostFound = async (req, res) => {
+  try {
+    const items = await prisma.lostFound.findMany({ orderBy: { createdAt: 'desc' } });
+    sendSuccess(res, { items });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
+const iwillhandle = async (req, res) => {
+  try {
+    const { complaintId } = req.body;
+    if (!complaintId) return sendError(res, 'Complaint ID required', 400);
+
+    const complaint = await prisma.complaint.findUnique({ where: { id: complaintId } });
+    if (!complaint) return sendError(res, 'Complaint not found', 404);
+
+    const { cancelEscalation } = require('../services/schedulerService');
     cancelEscalation(complaintId);
-   await ref.update({ adminHandling: true, adminHandledAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() });
 
-      const complaint = snap.data();
-      if (complaint.submittedBy) {
-        const studentSnap = await admin.firestore().collection('users').doc(complaint.submittedBy).get();
-        const token = studentSnap.exists ? studentSnap.data().expoPushToken : null;
-        if (token) {
-          await fetch('https://exp.host/--/api/v2/push/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify([{ to: token, title: 'Admin is handling your complaint', body: 'The admin has taken ownership of your complaint.', sound: 'default', data: { type: 'complaint_accepted', complaintId } }]),
-          });
-        }
+    await prisma.complaint.update({
+      where: { id: complaintId },
+      data: { adminHandling: true, adminHandledAt: new Date() },
+    });
+
+    if (complaint.submittedById) {
+      const { sendPushNotification, getTokenForUid } = require('../services/notificationService');
+      const tokens = await getTokenForUid(complaint.submittedById);
+      if (tokens.length > 0) {
+        await sendPushNotification(tokens, 'Admin is handling your complaint', 'The admin has taken ownership of your complaint.', {
+          type: 'complaint_accepted',
+          complaintId,
+        });
       }
-
-  await createAuditLog({
-        action: 'admin_iwillhandle',
-        performedBy: 'admin',
-        performedByRole: 'admin',
-        targetId: complaintId,
-        targetType: 'complaint',
-      });
-      logger.info('[Admin] iwillhandle', { complaintId });
-      sendSuccess(res, { message: 'Marked as admin handling' });
-    } catch (error) {
-      logger.error('[Admin] iwillhandle failed', { error: error.message });
-      sendError(res, error.message);
     }
-  };
 
-  const markFlagResolved = async (req, res) => {
-    try {
-      const { complaintId } = req.body;
-      if (!complaintId) return sendError(res, 'Complaint ID required', 400);
+    await createAuditLog({ action: 'admin_iwillhandle', performedBy: req.admin?.uid, performedByRole: 'admin', targetId: complaintId, targetType: 'complaint' });
+    logger.info('[Admin] iwillhandle', { complaintId });
+    sendSuccess(res, { message: 'Marked as admin handling' });
+  } catch (error) {
+    logger.error('[Admin] iwillhandle failed', { error: error.message });
+    sendError(res, error.message);
+  }
+};
 
-      const ref = admin.firestore().collection('complaints').doc(complaintId);
-      const snap = await ref.get();
-      if (!snap.exists) return sendError(res, 'Complaint not found', 404);
+const markFlagResolved = async (req, res) => {
+  try {
+    const { complaintId } = req.body;
+    if (!complaintId) return sendError(res, 'Complaint ID required', 400);
 
-      const resolvedAt = admin.firestore.Timestamp.now();
+    const complaint = await prisma.complaint.findUnique({ where: { id: complaintId } });
+    if (!complaint) return sendError(res, 'Complaint not found', 404);
 
-await ref.update({
+    const resolvedAt = new Date();
+    await prisma.complaint.update({
+      where: { id: complaintId },
+      data: {
         status: 'completed',
         flagResolved: true,
         flagResolvedBy: 'admin',
@@ -510,67 +413,56 @@ await ref.update({
         completedAt: resolvedAt,
         hodResolutionEmailSent: true,
         ratingDisabled: true,
-        updatedAt: resolvedAt,
-      });
+      },
+    });
 
-      const complaint = { id: complaintId, ...snap.data(), flagResolvedAt: resolvedAt, flagResolvedBy: 'admin' };
-
-      // Notify student
-      if (complaint.submittedBy) {
-        const studentSnap = await admin.firestore().collection('users').doc(complaint.submittedBy).get();
-        const token = studentSnap.exists ? studentSnap.data().expoPushToken : null;
-        if (token) {
-          await fetch('https://exp.host/--/api/v2/push/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify([{ to: token, title: 'Complaint Resolved', body: 'Your complaint has been resolved by the admin.', sound: 'default', data: { type: 'complaint_completed', complaintId } }]),
-          });
-        }
+    if (complaint.submittedById) {
+      const { sendPushNotification, getTokenForUid } = require('../services/notificationService');
+      const tokens = await getTokenForUid(complaint.submittedById);
+      if (tokens.length > 0) {
+        await sendPushNotification(tokens, 'Complaint Resolved', 'Your complaint has been resolved by the admin.', {
+          type: 'complaint_completed',
+          complaintId,
+        });
       }
-
-      // Send HOD resolution email
-      try {
-        const { sendHODResolutionEmail } = require('../controllers/escalationController');
-        await sendHODResolutionEmail(complaint, 'admin');
-      } catch (emailErr) {
-        console.error('HOD resolution email failed:', emailErr.message);
-      }
-
-  await createAuditLog({
-        action: 'admin_resolved_complaint',
-        performedBy: 'admin',
-        performedByRole: 'admin',
-        targetId: complaintId,
-        targetType: 'complaint',
-      });
-      logger.info('[Admin] markFlagResolved', { complaintId });
-      sendSuccess(res, { message: 'Complaint marked as resolved' });
-    } catch (error) {
-      logger.error('[Admin] markFlagResolved failed', { error: error.message });
-      sendError(res, error.message);
     }
-  };
 
-  module.exports = {
-    login,
-    getPendingStaff,
-    getAllStaff,
-    getStaffById,
-    approveStaff,
-    rejectStaff,
-    getStats,
-    getAllComplaints,
-    getAllUsers,
-    getUserIdCard,
-    getIdCardRequests,
-    approveIdCard,
-    rejectIdCard,
-    getDeletionRequests,
-    approveDeletion,
-    rejectDeletion,
-    getSecurityIssues,
-    resolveSecurityIssue,
-    getAllLostFound,
-    iwillhandle,
+    try {
+      const { sendHODResolutionEmail } = require('./escalationController');
+      await sendHODResolutionEmail({ ...complaint, id: complaintId, flagResolvedAt: resolvedAt, flagResolvedBy: 'admin' }, 'admin');
+    } catch (emailErr) {
+      console.error('HOD resolution email failed:', emailErr.message);
+    }
+
+    await createAuditLog({ action: 'admin_resolved_complaint', performedBy: req.admin?.uid, performedByRole: 'admin', targetId: complaintId, targetType: 'complaint' });
+    logger.info('[Admin] markFlagResolved', { complaintId });
+    sendSuccess(res, { message: 'Complaint marked as resolved' });
+  } catch (error) {
+    logger.error('[Admin] markFlagResolved failed', { error: error.message });
+    sendError(res, error.message);
+  }
+};
+
+module.exports = {
+  login,
+  getPendingStaff,
+  getAllStaff,
+  getStaffById,
+  approveStaff,
+  rejectStaff,
+  getStats,
+  getAllComplaints,
+  getAllUsers,
+  getUserIdCard,
+  getIdCardRequests,
+  approveIdCard,
+  rejectIdCard,
+  getDeletionRequests,
+  approveDeletion,
+  rejectDeletion,
+  getSecurityIssues,
+  resolveSecurityIssue,
+  getAllLostFound,
+  iwillhandle,
   markFlagResolved,
-  };
+};

@@ -1,23 +1,21 @@
 const { Worker } = require('bullmq');
 const redis = require('../config/redis');
-const admin = require('../config/firebase');
+const prisma = require('../config/prisma');
 const logger = require('../services/logger');
+const { sendPushNotification, getTokensByRole } = require('../services/notificationService');
 
 const worker = new Worker(
   'escalation',
   async (job) => {
     logger.info(`[Worker] Job received: ${job.name} for ${job.data.complaintId}`);
     const { complaintId } = job.data;
-    const db = admin.firestore();
-    const ref = db.collection('complaints').doc(complaintId);
-    const snap = await ref.get();
 
-    if (!snap.exists) {
+    const complaint = await prisma.complaint.findUnique({ where: { id: complaintId } });
+
+    if (!complaint) {
       logger.warn(`[Worker] Complaint ${complaintId} not found, skipping`);
       return;
     }
-
-    const complaint = { id: complaintId, ...snap.data() };
 
     if (complaint.status === 'completed' || complaint.status === 'rejected' || complaint.flagResolved) {
       logger.info(`[Worker] Complaint ${complaintId} already resolved, skipping`);
@@ -25,54 +23,44 @@ const worker = new Worker(
     }
 
     if (job.name === 'flag-complaint' && !complaint.flagged) {
-      const adminSnap = await db.collection('users').where('role', '==', 'admin').get();
-      const adminTokens = adminSnap.docs
-        .map(d => d.data().expoPushToken)
-        .filter(t => t && t.startsWith('ExponentPushToken'));
+      const adminTokens = await getTokensByRole(['admin']);
 
-await ref.update({
-        flagged: true,
-        flaggedAt: admin.firestore.Timestamp.now(),
-        flagReason: complaint.acceptedAt ? 'unresolved' : 'no_acceptance',
-        flagResolved: false,
-        adminHandling: false,
-        hodEmailSent: false,
-        hodResolutionEmailSent: false,
-        updatedAt: admin.firestore.Timestamp.now(),
+      await prisma.complaint.update({
+        where: { id: complaintId },
+        data: {
+          flagged: true,
+          flaggedAt: new Date(),
+          flagReason: complaint.acceptedAt ? 'unresolved' : 'no_acceptance',
+          flagResolved: false,
+          adminHandling: false,
+          hodEmailSent: false,
+          hodResolutionEmailSent: false,
+        },
       });
 
       if (adminTokens.length > 0) {
-        await fetch('https://exp.host/--/api/v2/push/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(adminTokens.map(token => ({
-            to: token,
-            title: 'Complaint Flagged',
-            body: `${complaint.category} complaint from ${complaint.submittedByName || 'a student'} exceeded time limit.`,
-            data: { type: 'escalation', complaintId },
-            sound: 'default',
-          }))),
-        });
+        await sendPushNotification(adminTokens, 'Complaint Flagged', `${complaint.category} complaint from ${complaint.submittedByName || 'a student'} exceeded time limit.`, { type: 'escalation', complaintId });
       }
 
-     const { scheduleHodEmail } = require('../services/schedulerService');
+      const { scheduleHodEmail } = require('../services/schedulerService');
       await scheduleHodEmail(complaintId);
 
       logger.info(`[Worker] Flagged complaint ${complaintId}`);
-      // Hash cleared server-side clients will force re-sync on next poll
     }
 
-    if (job.name === 'hod-email' && complaint.flagged && !complaint.hodEmailSent) {
-      const { sendEscalationHODEmail } = require('../controllers/escalationController');
-      await sendEscalationHODEmail(complaint);
+    if (job.name === 'hod-email') {
+      const refetched = await prisma.complaint.findUnique({ where: { id: complaintId } });
+      if (refetched && refetched.flagged && !refetched.hodEmailSent) {
+        const { sendEscalationHODEmail } = require('../controllers/escalationController');
+        await sendEscalationHODEmail(refetched);
 
-    await ref.update({
-        hodEmailSent: true,
-        hodEmailSentAt: admin.firestore.Timestamp.now(),
-        updatedAt: admin.firestore.Timestamp.now(),
-      });
+        await prisma.complaint.update({
+          where: { id: complaintId },
+          data: { hodEmailSent: true, hodEmailSentAt: new Date() },
+        });
 
-      logger.info(`[Worker] HOD email sent for complaint ${complaintId}`);
+        logger.info(`[Worker] HOD email sent for complaint ${complaintId}`);
+      }
     }
   },
   { connection: redis, concurrency: 5 }
@@ -87,4 +75,4 @@ worker.on('failed', (job, err) => {
 worker.on('error', (err) => logger.error(`[Worker] Worker error: ${err.message}`));
 worker.on('active', (job) => logger.info(`[Worker] Job active: ${job.id} - ${job.name}`));
 
-module.exports = worker;  
+module.exports = worker;

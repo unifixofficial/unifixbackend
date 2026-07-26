@@ -1,0 +1,432 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  student
+  teacher
+  staff
+  admin
+}
+
+enum VerificationStatus {
+  pending
+  approved
+  rejected
+}
+
+enum AccountStatus {
+  active
+  suspended
+  deleted
+}
+
+enum ComplaintStatus {
+  pending
+  assigned
+  in_progress
+  completed
+  rejected
+}
+
+enum LostFoundStatus {
+  available
+  handed_over
+}
+
+enum LostReportStatus {
+  active
+  found
+  deleted
+}
+
+enum RequestStatus {
+  pending
+  approved
+  rejected
+}
+
+enum SecurityIssueStatus {
+  open
+  resolved
+}
+
+enum NotificationStatus {
+  sent
+  failed
+}
+
+model User {
+  id                  String             @id @default(uuid())
+  fullName            String
+  email               String             @unique
+  phone               String?
+  passwordHash        String
+  role                Role
+  gender              String?
+  profilePhoto        String?
+  isVerified          Boolean            @default(false)
+  profileCompleted    Boolean            @default(false)
+  accountStatus       AccountStatus      @default(active)
+  verificationStatus  VerificationStatus?
+  rejectionMessage    String?
+  lastLogin           DateTime?
+  tokenVersion        Int                @default(0)
+  expoPushToken       String?
+  tokenUid            String?
+
+  year                String?
+  branch              String?
+  rollNumber          String?
+  studentIdCardUrl    String?
+  studentIdCardName   String?
+
+  department          String?
+  teacherId           String?
+  teacherIdCardUrl    String?
+  teacherIdCardName   String?
+  idCardUpdatedAt     DateTime?
+
+  employeeId          String?
+  designation         String?
+  experience          String?
+  idCardUrl           String?
+  idCardName          String?
+  certificateUrl      String?
+  certificateName     String?
+  avgRating           Float?
+  ratingTotal         Float?            @default(0)
+  ratingCount         Int               @default(0)
+  approvedAt          DateTime?
+  rejectedAt          DateTime?
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  refreshTokens       RefreshToken[]
+  deviceTokens        DeviceToken[]
+  otps                Otp[]
+  submittedComplaints Complaint[]       @relation("SubmittedComplaints")
+  assignedComplaints  Complaint[]       @relation("AssignedComplaints")
+  lostFoundPosts      LostFound[]
+  lostFoundClaims     Claim[]
+  lostReports         LostReport[]
+  idCardRequests      IdCardRequest[]
+  deletionRequests    DeletionRequest[]
+  securityIssues      SecurityIssue[]
+  raggingReports      RaggingReport[]
+  auditLogsPerformed  AuditLog[]
+  notificationLogs    NotificationLog[]
+
+  @@index([email])
+  @@index([role])
+  @@index([role, verificationStatus])
+  @@index([designation, verificationStatus])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model DeviceToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String
+  platform  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, token])
+  @@index([userId])
+}
+
+model Otp {
+  id        String   @id @default(uuid())
+  email     String
+  otp       String
+  type      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([email, type])
+  @@index([email])
+}
+
+model Complaint {
+  id                       String          @id @default(uuid())
+  ticketId                 String          @unique
+  category                 String
+  subIssue                 String?
+  customIssue              String?
+  description              String?
+  building                 String
+  roomDetail               String?
+  photoUrl                 String?
+  status                   ComplaintStatus @default(pending)
+  queueStatus              String          @default("waiting_for_staff")
+  submittedById            String
+  submittedByName          String
+  submittedByRole          String
+  submittedByEmail         String
+  submittedByPhone         String?
+  submittedByGender        String?
+  assignedToId             String?
+  assignedToName           String?
+  assignedToPhone          String?
+  assignableTo             String[]
+  rejectedBy               Json            @default("[]")
+  rejectedByUids           String[]
+  rejectionReason          String?
+  rating                   Int?
+  ratingComment            String?
+  ratedAt                  DateTime?
+  ratingDisabled           Boolean         @default(false)
+  flagged                  Boolean         @default(false)
+  flaggedAt                DateTime?
+  flagReason               String?
+  flagResolved             Boolean         @default(false)
+  flagResolvedBy           String?
+  flagResolvedAt           DateTime?
+  adminHandling            Boolean         @default(false)
+  adminHandledAt           DateTime?
+  hodEmailSent             Boolean         @default(false)
+  hodEmailSentAt           DateTime?
+  hodResolutionEmailSent   Boolean         @default(false)
+  acceptedAt               DateTime?
+  completedAt              DateTime?
+  nextCheckAt              DateTime?
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+
+  submittedBy  User  @relation("SubmittedComplaints", fields: [submittedById], references: [id])
+  assignedTo   User? @relation("AssignedComplaints", fields: [assignedToId], references: [id])
+
+  @@index([submittedById])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([flagged])
+  @@index([nextCheckAt])
+  @@index([updatedAt])
+}
+
+model LostFound {
+  id              String          @id @default(uuid())
+  itemName        String
+  category        String          @default("Others")
+  description     String?
+  roomNumber      String
+  roomLabel       String?
+  collectLocation String
+  photoUrl        String?
+  postedById      String
+  postedByName    String
+  postedByRole    String
+  postedByEmail   String
+  status          LostFoundStatus @default(available)
+  handedToName    String?
+  handedAt        DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  postedBy User    @relation(fields: [postedById], references: [id])
+  claims   Claim[]
+
+  @@index([postedById])
+  @@index([status])
+  @@index([updatedAt])
+}
+
+model Claim {
+  id              String    @id @default(uuid())
+  itemId          String
+  itemName        String
+  photoUrl        String?
+  handedByUid     String
+  handedByName    String
+  handedByRole    String
+  handedToName    String
+  roomNumber      String?
+  roomLabel       String?
+  collectLocation String?
+  handedAt        DateTime
+  createdAt       DateTime  @default(now())
+
+  item     LostFound @relation(fields: [itemId], references: [id])
+  handedBy User      @relation(fields: [handedByUid], references: [id])
+
+  @@index([itemId])
+  @@index([handedByUid])
+  @@index([createdAt])
+}
+
+model LostReport {
+  id            String           @id @default(uuid())
+  itemName      String
+  category      String
+  description   String
+  locationLost  String
+  dateLost      String
+  howToReach    String
+  images        String[]
+  postedById    String
+  postedByName  String
+  postedByRole  String
+  postedByDept  String?
+  status        LostReportStatus @default(active)
+  postedAt      DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  postedBy User @relation(fields: [postedById], references: [id])
+
+  @@index([postedById])
+  @@index([status])
+  @@index([postedAt])
+  @@index([updatedAt])
+}
+
+model IdCardRequest {
+  id              String        @id @default(uuid())
+  userId          String
+  email           String
+  fullName        String
+  role            String
+  newIdCardUrl    String
+  newIdCardName   String?
+  currentIdCardUrl String?
+  status          RequestStatus @default(pending)
+  rejectionReason String?
+  requestedAt     DateTime      @default(now())
+  processedAt     DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+}
+
+model DeletionRequest {
+  id              String        @id @default(uuid())
+  userId          String
+  email           String
+  fullName        String
+  role            String
+  designation     String?
+  status          RequestStatus @default(pending)
+  rejectionReason String?
+  requestedAt     DateTime      @default(now())
+  processedAt     DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+}
+
+model DeletionLog {
+  id          String   @id @default(uuid())
+  uid         String
+  email       String
+  fullName    String
+  role        String
+  designation String?
+  deletedBy   String?
+  deletedAt   DateTime @default(now())
+
+  @@index([uid])
+}
+
+model SecurityIssue {
+  id          String              @id @default(uuid())
+  userId      String
+  email       String
+  fullName    String
+  phone       String?
+  role        String
+  issueType   String
+  description String
+  status      SecurityIssueStatus @default(open)
+  resolution  String?
+  resolvedAt  DateTime?
+  reportedAt  DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+model RaggingReport {
+  id               String   @id @default(uuid())
+  userId           String?
+  isAnonymous      Boolean
+  reporterName     String
+  reporterEmail    String
+  reporterRollNumber String?
+  reporterBranch   String?
+  reporterYear     String?
+  incidentDate     String
+  incidentTime     String?
+  location         String
+  description      String
+  bullyDescription String?
+  status           String   @default("open")
+  reportedAt       DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id              String   @id @default(uuid())
+  action          String
+  performedById   String?
+  performedByRole String?
+  targetId        String?
+  targetType      String?
+  metadata        Json     @default("{}")
+  timestamp       DateTime @default(now())
+
+  performedBy User? @relation(fields: [performedById], references: [id], onDelete: SetNull)
+
+  @@index([performedById])
+  @@index([action])
+  @@index([timestamp])
+}
+
+model NotificationLog {
+  id           String             @id @default(uuid())
+  recipientId  String?
+  title        String
+  body         String
+  type         String
+  status       NotificationStatus
+  error        String?
+  tokenCount   Int                @default(0)
+  sentAt       DateTime           @default(now())
+
+  recipient User? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+
+  @@index([recipientId])
+  @@index([sentAt])
+}

@@ -1,9 +1,10 @@
-const admin = require('../config/firebase');
-const { sendSuccess, sendError } = require('../utils/response');
+const prisma = require('../config/prisma');
 const { sendPushNotification, getTokensByDesignation, getTokenForUid } = require('../services/notificationService');
 const { scheduleEscalation, cancelEscalation } = require('../services/schedulerService');
 const { createAuditLog } = require('../services/auditLogService');
+const { sendSuccess, sendError } = require('../utils/response');
 const logger = require('../services/logger');
+
 const CATEGORY_DESIGNATION_MAP = {
   electrical: 'Electrician',
   plumbing: 'Plumber',
@@ -21,31 +22,20 @@ const generateTicketId = () => {
   return `UNF-${timestamp}-${random}`;
 };
 
-const getPhoneForUid = async (uid) => {
-  try {
-    const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    return userDoc.exists ? userDoc.data().phone || '' : '';
-  } catch {
-    return '';
-  }
-};
-
 const getSeconds = (ts) => {
   if (!ts) return null;
-  if (typeof ts.toMillis === 'function') return ts.toMillis() / 1000;
-  if (typeof ts._seconds === 'number') return ts._seconds;
-  if (typeof ts.seconds === 'number') return ts.seconds;
+  if (ts instanceof Date) return ts.getTime() / 1000;
   if (typeof ts === 'number') return ts;
   return null;
 };
 
 const notifyReporter = async (reporterUid, title, body, data) => {
-  const tokens = await getTokenForUid(admin.firestore(), reporterUid);
+  const tokens = await getTokenForUid(reporterUid);
   if (tokens.length > 0) sendPushNotification(tokens, title, body, data);
 };
 
 const notifyStaffMember = async (staffUid, title, body, data) => {
-  const tokens = await getTokenForUid(admin.firestore(), staffUid);
+  const tokens = await getTokenForUid(staffUid);
   if (tokens.length > 0) sendPushNotification(tokens, title, body, data);
 };
 
@@ -59,98 +49,75 @@ const submit = async (req, res) => {
 
     if (!subIssue && !customIssue) return sendError(res, 'Please select or enter an issue', 400);
 
-    const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    if (!userDoc.exists) return sendError(res, 'User not found', 404);
+    const user = await prisma.user.findUnique({ where: { id: uid } });
+    if (!user) return sendError(res, 'User not found', 404);
 
-    const userData = userDoc.data();
     const ticketId = generateTicketId();
     let assignableTo = [];
     let requiredDesignation = null;
     let notifyGender = null;
 
     if (category === 'washroom') {
-      const userGender = userData.gender || null;
-      if (!userGender) return sendError(res, 'Your profile does not have a gender set. Please update your profile first.', 400);
-      const staffSnapshot = await admin.firestore()
-        .collection('users')
-        .where('role', '==', 'staff')
-        .where('designation', '==', 'Cleaner')
-        .where('verificationStatus', '==', 'approved')
-        .where('gender', '==', userGender)
-        .get();
-      assignableTo = staffSnapshot.docs.map(doc => doc.id);
+      if (!user.gender) return sendError(res, 'Your profile does not have a gender set. Please update your profile first.', 400);
+      const staff = await prisma.user.findMany({
+        where: { role: 'staff', designation: 'Cleaner', verificationStatus: 'approved', gender: user.gender },
+        select: { id: true },
+      });
+      assignableTo = staff.map(s => s.id);
       requiredDesignation = 'Cleaner';
-      notifyGender = userGender;
+      notifyGender = user.gender;
     } else {
       requiredDesignation = CATEGORY_DESIGNATION_MAP[category] || null;
       if (requiredDesignation) {
-        const staffSnapshot = await admin.firestore()
-          .collection('users')
-          .where('role', '==', 'staff')
-          .where('designation', '==', requiredDesignation)
-          .where('verificationStatus', '==', 'approved')
-          .get();
-        assignableTo = staffSnapshot.docs.map(doc => doc.id);
+        const staff = await prisma.user.findMany({
+          where: { role: 'staff', designation: requiredDesignation, verificationStatus: 'approved' },
+          select: { id: true },
+        });
+        assignableTo = staff.map(s => s.id);
       }
     }
 
-    const complaintData = {
-      ticketId,
-      category,
-      subIssue: subIssue || null,
-      customIssue: customIssue || null,
-      description: description || '',
-      building,
-      roomDetail: roomDetail || '',
-      photoUrl: photoUrl || null,
-      submittedBy: uid,
-      submittedByName: userData.fullName || '',
-      submittedByRole: userData.role || '',
-      submittedByEmail: userData.email || '',
-      submittedByPhone: userData.phone || '',
-      submittedByGender: userData.gender || '',
-      assignableTo,
-      rejectedBy: [],
-      assignedTo: null,
-      assignedToName: null,
-      assignedToPhone: null,
-      status: 'pending',
-      queueStatus: 'waiting_for_staff',
-      rating: null,
-      ratingComment: null,
-      ratedAt: null,
-    createdAt: admin.firestore.Timestamp.now(),
-      updatedAt: admin.firestore.Timestamp.now(),
-      completedAt: null,
-      nextCheckAt: admin.firestore.Timestamp.fromMillis(Date.now() + (require('../config/escalationLimits').NO_ACCEPTANCE_LIMITS[category?.toLowerCase()] || 24 * 60 * 60 * 1000)),
-    };
+    const { NO_ACCEPTANCE_LIMITS } = require('../config/escalationLimits');
+    const nextCheckAt = new Date(Date.now() + (NO_ACCEPTANCE_LIMITS[category?.toLowerCase()] || 24 * 60 * 60 * 1000));
 
-const docRef = await admin.firestore().collection('complaints').add(complaintData);
- await scheduleEscalation(docRef.id, category, Date.now());
+    const complaint = await prisma.complaint.create({
+      data: {
+        ticketId,
+        category,
+        subIssue: subIssue || null,
+        customIssue: customIssue || null,
+        description: description || '',
+        building,
+        roomDetail: roomDetail || '',
+        photoUrl: photoUrl || null,
+        submittedById: uid,
+        submittedByName: user.fullName || '',
+        submittedByRole: user.role || '',
+        submittedByEmail: user.email || '',
+        submittedByPhone: user.phone || '',
+        submittedByGender: user.gender || '',
+        assignableTo,
+        nextCheckAt,
+      },
+    });
 
-  await createAuditLog({
-    action: 'complaint_submitted',
-    performedBy: uid,
-    performedByRole: userData.role,
-    targetId: docRef.id,
-    targetType: 'complaint',
-    metadata: { category, building, ticketId },
-  });
-  logger.info('[Complaint] Submitted', { complaintId: docRef.id, uid, category });
+    await scheduleEscalation(complaint.id, category, Date.now());
+    await createAuditLog({ action: 'complaint_submitted', performedBy: uid, performedByRole: user.role, targetId: complaint.id, targetType: 'complaint', metadata: { category, building, ticketId } });
+    logger.info('[Complaint] Submitted', { complaintId: complaint.id, uid, category });
 
     if (assignableTo.length > 0 && requiredDesignation) {
-      const staffTokens = await getTokensByDesignation(admin.firestore(), requiredDesignation, uid, notifyGender);
+      const staffTokens = await getTokensByDesignation(requiredDesignation, uid, notifyGender);
       const issueTitle = subIssue || customIssue || 'New Issue';
-    sendPushNotification(staffTokens, 'New Complaint Assigned', `${userData.fullName || 'Someone'} reported: ${issueTitle}. Location: ${building.replace(/\s*—\s*/g, ', ')}`, {
+      sendPushNotification(staffTokens, 'New Complaint Assigned', `${user.fullName || 'Someone'} reported: ${issueTitle}. Location: ${building.replace(/\s*—\s*/g, ', ')}`, {
         type: 'new_complaint',
-        complaintId: docRef.id,
+        complaintId: complaint.id,
         ticketId,
       });
     }
 
     sendSuccess(res, {
       ticketId,
-      complaintId: docRef.id,
+      complaintId: complaint.id,
       message: 'Complaint submitted successfully',
       queueStatus: 'waiting_for_staff',
       assignableStaffCount: assignableTo.length,
@@ -169,58 +136,44 @@ const accept = async (req, res) => {
     const uid = req.user.uid;
     if (!complaintId) return sendError(res, 'Complaint ID required', 400);
 
-    const staffDoc = await admin.firestore().collection('users').doc(uid).get();
-    if (!staffDoc.exists) return sendError(res, 'Staff not found', 404);
+    const staffUser = await prisma.user.findUnique({ where: { id: uid } });
+    if (!staffUser) return sendError(res, 'Staff not found', 404);
 
-    const complaintRef = admin.firestore().collection('complaints').doc(complaintId);
-    const complaintDoc = await complaintRef.get();
-    if (!complaintDoc.exists) return sendError(res, 'Complaint not found', 404);
-
-    const complaint = complaintDoc.data();
+    const complaint = await prisma.complaint.findUnique({ where: { id: complaintId } });
+    if (!complaint) return sendError(res, 'Complaint not found', 404);
     if (complaint.status !== 'pending') return sendError(res, 'Complaint already accepted by someone else', 400);
     if (!complaint.assignableTo.includes(uid)) return sendError(res, 'You are not authorized to accept this complaint', 403);
 
-    const staffData = staffDoc.data();
+    const { ESCALATION_LIMITS } = require('../config/escalationLimits');
+    const nextCheckAt = new Date(Date.now() + (ESCALATION_LIMITS[complaint.category?.toLowerCase()] || 24 * 60 * 60 * 1000));
 
-await complaintRef.update({
-    status: 'assigned',
-    queueStatus: 'assigned',
-    assignedTo: uid,
-    assignedToName: staffData.fullName || '',
-    assignedToPhone: staffData.phone || '',
-    acceptedAt: admin.firestore.Timestamp.now(),
-    updatedAt: admin.firestore.Timestamp.now(),
-    nextCheckAt: admin.firestore.Timestamp.fromMillis(Date.now() + (require('../config/escalationLimits').ESCALATION_LIMITS[complaint.category?.toLowerCase()] || 24 * 60 * 60 * 1000)),
-  });
-  // Only reschedule after Firestore confirms the update
-  await cancelEscalation(complaintId);
-  await scheduleEscalation(complaintId, complaint.category, Date.now());
-
-  await createAuditLog({
-    action: 'complaint_accepted',
-    performedBy: uid,
-    performedByRole: 'staff',
-    targetId: complaintId,
-    targetType: 'complaint',
-    metadata: { ticketId: complaint.ticketId },
-  });
-  logger.info('[Complaint] Accepted', { complaintId, staffUid: uid });
-
-    const issueTitle = complaint.subIssue || complaint.customIssue || 'Your complaint';
-
-    await notifyReporter(complaint.submittedBy, 'Complaint Accepted', `${staffData.fullName || 'A staff member'} has accepted your complaint: ${issueTitle}`, {
-      type: 'complaint_accepted',
-      complaintId,
-      ticketId: complaint.ticketId,
+    await prisma.complaint.update({
+      where: { id: complaintId },
+      data: {
+        status: 'assigned',
+        queueStatus: 'assigned',
+        assignedToId: uid,
+        assignedToName: staffUser.fullName || '',
+        assignedToPhone: staffUser.phone || '',
+        acceptedAt: new Date(),
+        nextCheckAt,
+      },
     });
 
-  const cleanBuilding = complaint.building.replace(/—/g, '').trim();
-const cleanTitle = issueTitle.replace(/—/g, '').trim();
+    await cancelEscalation(complaintId);
+    await scheduleEscalation(complaintId, complaint.category, Date.now());
+    await createAuditLog({ action: 'complaint_accepted', performedBy: uid, performedByRole: 'staff', targetId: complaintId, targetType: 'complaint', metadata: { ticketId: complaint.ticketId } });
+    logger.info('[Complaint] Accepted', { complaintId, staffUid: uid });
 
-await notifyStaffMember(uid, 'Complaint Accepted', `You accepted: ${cleanTitle} at ${cleanBuilding}, Room ${complaint.roomDetail || ''}`, {
-      type: 'complaint_accepted',
-      complaintId,
-      ticketId: complaint.ticketId,
+    const issueTitle = complaint.subIssue || complaint.customIssue || 'Your complaint';
+    await notifyReporter(complaint.submittedById, 'Complaint Accepted', `${staffUser.fullName || 'A staff member'} has accepted your complaint: ${issueTitle}`, {
+      type: 'complaint_accepted', complaintId, ticketId: complaint.ticketId,
+    });
+
+    const cleanBuilding = complaint.building.replace(/—/g, '').trim();
+    const cleanTitle = issueTitle.replace(/—/g, '').trim();
+    await notifyStaffMember(uid, 'Complaint Accepted', `You accepted: ${cleanTitle} at ${cleanBuilding}, Room ${complaint.roomDetail || ''}`, {
+      type: 'complaint_accepted', complaintId, ticketId: complaint.ticketId,
     });
 
     sendSuccess(res, { message: 'Complaint accepted successfully' });
@@ -241,96 +194,46 @@ const updateStatus = async (req, res) => {
     const validStatuses = ['in_progress', 'completed'];
     if (!validStatuses.includes(status)) return sendError(res, 'Invalid status', 400);
 
-    const complaintRef = admin.firestore().collection('complaints').doc(complaintId);
-    const complaintDoc = await complaintRef.get();
-    if (!complaintDoc.exists) return sendError(res, 'Complaint not found', 404);
+    const complaint = await prisma.complaint.findUnique({ where: { id: complaintId } });
+    if (!complaint) return sendError(res, 'Complaint not found', 404);
+    if (complaint.assignedToId !== uid) return sendError(res, 'You are not assigned to this complaint', 403);
 
-    const complaint = complaintDoc.data();
-    if (complaint.assignedTo !== uid) return sendError(res, 'You are not assigned to this complaint', 403);
+    const updateData = { status, queueStatus: status };
+    if (status === 'completed') {
+      updateData.completedAt = new Date();
+      updateData.nextCheckAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+      cancelEscalation(complaintId);
+    }
 
-    const updateData = {
-      status,
-      queueStatus: status,
-      updatedAt: admin.firestore.Timestamp.now(),
-    };
-if (status === 'completed') {
-    updateData.completedAt = admin.firestore.Timestamp.now();
-    updateData.nextCheckAt = admin.firestore.Timestamp.fromMillis(Date.now() + 365 * 24 * 60 * 60 * 1000);
-    cancelEscalation(complaintId);
-  }
-  await complaintRef.update(updateData);
-
-  await createAuditLog({
-    action: `complaint_status_${status}`,
-    performedBy: uid,
-    performedByRole: 'staff',
-    targetId: complaintId,
-    targetType: 'complaint',
-    metadata: { status, ticketId: complaint.ticketId },
-  });
-  logger.info('[Complaint] Status updated', { complaintId, status, staffUid: uid });
+    await prisma.complaint.update({ where: { id: complaintId }, data: updateData });
+    await createAuditLog({ action: `complaint_status_${status}`, performedBy: uid, performedByRole: 'staff', targetId: complaintId, targetType: 'complaint', metadata: { status, ticketId: complaint.ticketId } });
+    logger.info('[Complaint] Status updated', { complaintId, status, staffUid: uid });
 
     const issueTitle = complaint.subIssue || complaint.customIssue || 'Your complaint';
 
     if (status === 'in_progress') {
-      await notifyReporter(complaint.submittedBy, 'Work In Progress', `Work has started on your complaint: ${issueTitle}`, {
-        type: 'complaint_in_progress',
-        complaintId,
-        ticketId: complaint.ticketId,
-      });
-      await notifyStaffMember(uid, 'Status Updated', `You marked "${issueTitle}" as In Progress`, {
-        type: 'complaint_in_progress',
-        complaintId,
-        ticketId: complaint.ticketId,
-      });
+      await notifyReporter(complaint.submittedById, 'Work In Progress', `Work has started on your complaint: ${issueTitle}`, { type: 'complaint_in_progress', complaintId, ticketId: complaint.ticketId });
+      await notifyStaffMember(uid, 'Status Updated', `You marked "${issueTitle}" as In Progress`, { type: 'complaint_in_progress', complaintId, ticketId: complaint.ticketId });
     }
 
-if (status === 'completed') {
-      await notifyReporter(complaint.submittedBy, 'Complaint Resolved', `Your complaint "${issueTitle}" has been resolved. Please rate the work.`, {
-        type: 'complaint_completed',
-        complaintId,
-        ticketId: complaint.ticketId,
-      });
-      await notifyStaffMember(uid, 'Task Completed', `You completed: ${issueTitle}`, {
-        type: 'complaint_completed',
-        complaintId,
-        ticketId: complaint.ticketId,
-      });
+    if (status === 'completed') {
+      await notifyReporter(complaint.submittedById, 'Complaint Resolved', `Your complaint "${issueTitle}" has been resolved. Please rate the work.`, { type: 'complaint_completed', complaintId, ticketId: complaint.ticketId });
+      await notifyStaffMember(uid, 'Task Completed', `You completed: ${issueTitle}`, { type: 'complaint_completed', complaintId, ticketId: complaint.ticketId });
 
-      // Notify admin if complaint was flagged
       if (complaint.flagged && !complaint.flagResolved) {
-        const adminSnap = await admin.firestore().collection('users').where('role', '==', 'admin').get();
-        const adminTokens = adminSnap.docs.map(d => d.data().expoPushToken).filter(t => t && t.startsWith('ExponentPushToken'));
+        const adminTokens = await require('../services/notificationService').getTokensByRole(['admin']);
         if (adminTokens.length > 0) {
-          await fetch('https://exp.host/--/api/v2/push/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(adminTokens.map(token => ({
-              to: token,
-              title: 'Flagged Complaint Resolved by Staff',
-              body: `${complaint.assignedToName || 'Staff'} resolved: ${issueTitle}`,
-              data: { type: 'complaint_completed', complaintId },
-              sound: 'default',
-            }))),
-          });
+          await sendPushNotification(adminTokens, 'Flagged Complaint Resolved by Staff', `${complaint.assignedToName || 'Staff'} resolved: ${issueTitle}`, { type: 'complaint_completed', complaintId });
         }
 
-        // Send HOD resolution email if HOD was already notified
-       if (complaint.hodEmailSent) {
+        if (complaint.hodEmailSent) {
           try {
-            await complaintRef.update({
-              flagResolvedBy: 'staff',
-              flagResolvedAt: admin.firestore.Timestamp.now(),
-              hodResolutionEmailSent: true,
+            await prisma.complaint.update({
+              where: { id: complaintId },
+              data: { flagResolvedBy: 'staff', flagResolvedAt: new Date(), hodResolutionEmailSent: true },
             });
-            const { sendHODResolutionEmail } = require('../controllers/escalationController');
-            const updatedComplaint = {
-              ...complaint,
-              id: complaintId,
-              flagResolvedBy: 'staff',
-              flagResolvedAt: admin.firestore.Timestamp.now(),
-            };
-            await sendHODResolutionEmail(updatedComplaint, 'staff');
+            const { sendHODResolutionEmail } = require('./escalationController');
+            await sendHODResolutionEmail({ ...complaint, id: complaintId, flagResolvedBy: 'staff', flagResolvedAt: new Date() }, 'staff');
           } catch (emailErr) {
             console.error('HOD resolution email failed:', emailErr.message);
           }
@@ -346,69 +249,52 @@ if (status === 'completed') {
 
 const reject = async (req, res) => {
   try {
-      const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-      if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
+    const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
+    if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
 
     const { complaintId, reason } = req.body;
     if (!complaintId || !reason) return sendError(res, 'complaintId and reason are required.', 400);
 
     const uid = req.user.uid;
-    const ref = admin.firestore().collection('complaints').doc(complaintId);
-    const snap = await ref.get();
-    if (!snap.exists) return sendError(res, 'Complaint not found.', 404);
-
-    const complaint = snap.data();
+    const complaint = await prisma.complaint.findUnique({ where: { id: complaintId } });
+    if (!complaint) return sendError(res, 'Complaint not found.', 404);
     if (!complaint.assignableTo?.includes(uid)) return sendError(res, 'You are not authorized to reject this complaint.', 403);
     if (complaint.status !== 'pending') return sendError(res, 'Only pending complaints can be rejected.', 400);
 
-    const staffSnap = await admin.firestore().collection('users').doc(uid).get();
-    const staffName = staffSnap.exists ? staffSnap.data().fullName : 'Staff';
+    const staffUser = await prisma.user.findUnique({ where: { id: uid }, select: { fullName: true } });
+    const staffName = staffUser?.fullName || 'Staff';
 
-   const newAssignableTo = complaint.assignableTo.filter(id => id !== uid);
-    const rejectedBy = complaint.rejectedBy || [];
+    const newAssignableTo = complaint.assignableTo.filter(id => id !== uid);
+    const rejectedBy = Array.isArray(complaint.rejectedBy) ? complaint.rejectedBy : [];
     rejectedBy.push({ uid, name: staffName, reason, rejectedAt: new Date().toISOString() });
     const rejectedByUids = rejectedBy.map(r => r.uid);
 
-    const updateData = {
-      assignableTo: newAssignableTo,
-      rejectedBy,
-      rejectedByUids,
-      updatedAt: admin.firestore.Timestamp.now(),
-    };
+    const updateData = { assignableTo: newAssignableTo, rejectedBy, rejectedByUids };
 
-if (newAssignableTo.length === 0) {
-    updateData.status = 'rejected';
-    updateData.queueStatus = 'rejected';
-    updateData.rejectionReason = reason;
-    updateData.nextCheckAt = admin.firestore.Timestamp.fromMillis(Date.now() + 365 * 24 * 60 * 60 * 1000);
-    cancelEscalation(complaintId);
-    logger.info('[Complaint] Fully rejected by all staff', { complaintId });
+    if (newAssignableTo.length === 0) {
+      updateData.status = 'rejected';
+      updateData.queueStatus = 'rejected';
+      updateData.rejectionReason = reason;
+      updateData.nextCheckAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+      cancelEscalation(complaintId);
+      logger.info('[Complaint] Fully rejected by all staff', { complaintId });
 
       const issueTitle = complaint.subIssue || complaint.customIssue || 'Your complaint';
-      await notifyReporter(complaint.submittedBy, 'Complaint Rejected', `Unfortunately your complaint "${issueTitle}" could not be assigned to any staff.`, {
-        type: 'complaint_rejected',
-        complaintId,
-        ticketId: complaint.ticketId,
+      await notifyReporter(complaint.submittedById, 'Complaint Rejected', `Unfortunately your complaint "${issueTitle}" could not be assigned to any staff.`, {
+        type: 'complaint_rejected', complaintId, ticketId: complaint.ticketId,
       });
     }
 
-    await ref.update(updateData);
+    await prisma.complaint.update({ where: { id: complaintId }, data: updateData });
+    await createAuditLog({ action: 'complaint_rejected', performedBy: uid, performedByRole: 'staff', targetId: complaintId, targetType: 'complaint', metadata: { reason, allRejected: newAssignableTo.length === 0 } });
 
-await createAuditLog({
-      action: 'complaint_rejected',
-      performedBy: uid,
-      performedByRole: 'staff',
-      targetId: complaintId,
-      targetType: 'complaint',
-      metadata: { reason, allRejected: newAssignableTo.length === 0 },
-    });
     sendSuccess(res, {
       message: newAssignableTo.length > 0
         ? 'You rejected this complaint. Other staff can still accept it.'
         : 'Complaint rejected by all staff.',
     });
   } catch (error) {
-    logger.error('[Complaint] Reject failed', { error: error.message, complaintId });
+    logger.error('[Complaint] Reject failed', { error: error.message, complaintId: req.body?.complaintId });
     sendError(res, error.message);
   }
 };
@@ -418,40 +304,31 @@ const rate = async (req, res) => {
     const { complaintId, rating, comment } = req.body;
     const uid = req.user.uid;
 
-    const ref = admin.firestore().collection('complaints').doc(complaintId);
-    const snap = await ref.get();
-    if (!snap.exists) return sendError(res, 'Complaint not found.', 404);
-
-    const complaint = snap.data();
-   if (complaint.submittedBy !== uid) return sendError(res, 'You can only rate your own complaints.', 403);
+    const complaint = await prisma.complaint.findUnique({ where: { id: complaintId } });
+    if (!complaint) return sendError(res, 'Complaint not found.', 404);
+    if (complaint.submittedById !== uid) return sendError(res, 'You can only rate your own complaints.', 403);
     if (complaint.status !== 'completed') return sendError(res, 'You can only rate completed complaints.', 400);
     if (complaint.rating !== null && complaint.rating !== undefined) return sendError(res, 'You have already rated this complaint.', 400);
-    if (!complaint.assignedTo) return sendError(res, 'No staff assigned to rate.', 400);
-  if (complaint.ratingDisabled === true) return sendError(res, 'This complaint cannot be rated.', 400);
+    if (!complaint.assignedToId) return sendError(res, 'No staff assigned to rate.', 400);
+    if (complaint.ratingDisabled) return sendError(res, 'This complaint cannot be rated.', 400);
 
-    await ref.update({
-      rating,
-      ratingComment: comment || null,
-      ratedAt: admin.firestore.Timestamp.now(),
-      updatedAt: admin.firestore.Timestamp.now(),
+    await prisma.complaint.update({
+      where: { id: complaintId },
+      data: { rating, ratingComment: comment || null, ratedAt: new Date() },
     });
 
-    const staffRef = admin.firestore().collection('users').doc(complaint.assignedTo);
-    const staffSnap = await staffRef.get();
-    if (staffSnap.exists) {
-      const staffData = staffSnap.data();
-      const newCount = (staffData.ratingCount || 0) + 1;
-      const newTotal = (staffData.ratingTotal || 0) + rating;
-      await staffRef.update({
-        ratingTotal: newTotal,
-        ratingCount: newCount,
-        avgRating: Math.round((newTotal / newCount) * 10) / 10,
+    const staffUser = await prisma.user.findUnique({ where: { id: complaint.assignedToId } });
+    if (staffUser) {
+      const newCount = (staffUser.ratingCount || 0) + 1;
+      const newTotal = (staffUser.ratingTotal || 0) + rating;
+      await prisma.user.update({
+        where: { id: complaint.assignedToId },
+        data: { ratingTotal: newTotal, ratingCount: newCount, avgRating: Math.round((newTotal / newCount) * 10) / 10 },
       });
 
       const stars = '★'.repeat(rating) + '☆'.repeat(5 - rating);
-      await notifyStaffMember(complaint.assignedTo, 'New Rating Received', `You received ${rating}/5 ${stars} for: ${complaint.subIssue || complaint.customIssue || 'a complaint'}`, {
-        type: 'new_rating',
-        complaintId,
+      await notifyStaffMember(complaint.assignedToId, 'New Rating Received', `You received ${rating}/5 ${stars} for: ${complaint.subIssue || complaint.customIssue || 'a complaint'}`, {
+        type: 'new_rating', complaintId,
       });
     }
 
@@ -464,26 +341,15 @@ const rate = async (req, res) => {
 const myComplaints = async (req, res) => {
   try {
     const uid = req.user.uid;
-    const since = req.query.since ? parseInt(req.query.since) : null;
-    let query = admin.firestore()
-      .collection('complaints')
-      .where('submittedBy', '==', uid)
-      .orderBy('updatedAt', 'desc');
-    if (since) {
-      const sinceTimestamp = admin.firestore.Timestamp.fromMillis(since);
-      query = query.where('updatedAt', '>', sinceTimestamp);
-    }
-    const snapshot = await query.get();
+    const since = req.query.since ? new Date(parseInt(req.query.since)) : null;
 
-// Batch fetch phones for all assigned staff in one pass
-    const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    const staffUids = [...new Set(docs.filter(d => d.assignedTo && !d.assignedToPhone).map(d => d.assignedTo))];
-   const phoneMap = {};
-    await Promise.all(staffUids.map(async uid => { phoneMap[uid] = await getPhoneForUid(uid); }));
-    const complaints = docs.map(d => ({
-      ...d,
-      assignedToPhone: d.assignedToPhone || phoneMap[d.assignedTo] || '',
-    }));
+    const complaints = await prisma.complaint.findMany({
+      where: {
+        submittedById: uid,
+        ...(since ? { updatedAt: { gt: since } } : {}),
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
 
     sendSuccess(res, { complaints });
   } catch (error) {
@@ -494,64 +360,26 @@ const myComplaints = async (req, res) => {
 const staffComplaints = async (req, res) => {
   try {
     const uid = req.user.uid;
-    const since = req.query.since ? parseInt(req.query.since) : null;
-    const sinceTimestamp = since ? admin.firestore.Timestamp.fromMillis(since) : null;
+    const since = req.query.since ? new Date(parseInt(req.query.since)) : null;
+    const sinceFilter = since ? { updatedAt: { gt: since } } : {};
 
-    const [pendingSnapshot, assignedSnapshot] = await Promise.all([
-      admin.firestore().collection('complaints')
-        .where('assignableTo', 'array-contains', uid)
-        .where('status', '==', 'pending')
-        .orderBy('createdAt', 'desc')
-        .get(),
-      admin.firestore().collection('complaints')
-        .where('assignedTo', '==', uid)
-        .orderBy('createdAt', 'desc')
-        .get(),
+    const [pendingSnap, assignedSnap, rejectedSnap] = await Promise.all([
+      prisma.complaint.findMany({
+        where: { assignableTo: { has: uid }, status: 'pending', ...sinceFilter },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.complaint.findMany({
+        where: { assignedToId: uid, ...sinceFilter },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.complaint.findMany({
+        where: { rejectedByUids: { has: uid }, ...sinceFilter },
+        orderBy: { createdAt: 'desc' },
+      }),
     ]);
 
-let pendingQuery = admin.firestore().collection('complaints')
-      .where('assignableTo', 'array-contains', uid)
-      .where('status', '==', 'pending')
-      .orderBy('createdAt', 'desc');
-    let assignedQuery = admin.firestore().collection('complaints')
-      .where('assignedTo', '==', uid)
-      .orderBy('createdAt', 'desc');
-    let rejectedQuery = admin.firestore().collection('complaints')
-      .where('rejectedByUids', 'array-contains', uid)
-      .orderBy('createdAt', 'desc');
-
-    if (sinceTimestamp) {
-      pendingQuery = pendingQuery.where('updatedAt', '>', sinceTimestamp);
-      assignedQuery = assignedQuery.where('updatedAt', '>', sinceTimestamp);
-      rejectedQuery = rejectedQuery.where('updatedAt', '>', sinceTimestamp);
-    }
-
-  const rejectedBySnapshot = await rejectedQuery.get();
-
-    const seenIds = new Set();
-    const allDocs = [...pendingSnapshot.docs, ...assignedSnapshot.docs, ...rejectedBySnapshot.docs];
-    const uniqueDocs = allDocs.filter(doc => {
-      if (seenIds.has(doc.id)) return false;
-      seenIds.add(doc.id);
-      return true;
-    });
-
-    const uniqueUids = [...new Set(uniqueDocs.map(doc => doc.data().submittedBy).filter(Boolean))];
-    const phoneMap = {};
-    await Promise.all(uniqueUids.map(async reporterUid => {
-      phoneMap[reporterUid] = await getPhoneForUid(reporterUid);
-    }));
-
-    const attachPhone = doc => {
-      const data = doc.data();
-      const livePhone = phoneMap[data.submittedBy] || '';
-      return { id: doc.id, ...data, submittedByPhone: livePhone || data.submittedByPhone || '' };
-    };
-
-    const pending = pendingSnapshot.docs.map(attachPhone);
-    const assigned = assignedSnapshot.docs.map(attachPhone);
-    const active = assigned.filter(c => c.status === 'assigned' || c.status === 'in_progress');
-    const completed = assigned.filter(c => c.status === 'completed');
+    const active = assignedSnap.filter(c => c.status === 'assigned' || c.status === 'in_progress');
+    const completed = assignedSnap.filter(c => c.status === 'completed');
 
     const completedWithTimes = completed.filter(c => c.createdAt && c.completedAt);
     let avgTimeMinutes = null;
@@ -561,25 +389,20 @@ let pendingQuery = admin.firestore().collection('complaints')
         const end = getSeconds(c.completedAt);
         return start !== null && end !== null ? sum + Math.max(0, (end - start) * 1000) : sum;
       }, 0);
-      const validCount = completedWithTimes.filter(c => getSeconds(c.createdAt) && getSeconds(c.completedAt)).length;
-      avgTimeMinutes = validCount > 0 ? Math.round(totalMs / validCount / 60000) : null;
+      avgTimeMinutes = completedWithTimes.length > 0 ? Math.round(totalMs / completedWithTimes.length / 60000) : null;
     }
 
-    const staffSnap = await admin.firestore().collection('users').doc(uid).get();
-    const staffData = staffSnap.exists ? staffSnap.data() : {};
-
-    const rejected = uniqueDocs
-      .map(attachPhone)
-      .filter(c => Array.isArray(c.rejectedBy) && c.rejectedBy.some(r => r.uid === uid));
+    const staffUser = await prisma.user.findUnique({ where: { id: uid }, select: { avgRating: true, ratingCount: true } });
+    const rejected = rejectedSnap.filter(c => Array.isArray(c.rejectedBy) && c.rejectedBy.some(r => r.uid === uid));
 
     sendSuccess(res, {
-      pending,
+      pending: pendingSnap,
       active,
       completed,
       rejected,
       avgTimeMinutes,
-      avgRating: staffData.avgRating || null,
-      ratingCount: staffData.ratingCount || 0,
+      avgRating: staffUser?.avgRating || null,
+      ratingCount: staffUser?.ratingCount || 0,
     });
   } catch (error) {
     sendError(res, error.message);
@@ -588,11 +411,7 @@ let pendingQuery = admin.firestore().collection('complaints')
 
 const allComplaints = async (req, res) => {
   try {
-    const snapshot = await admin.firestore()
-      .collection('complaints')
-      .orderBy('createdAt', 'desc')
-      .get();
-    const complaints = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const complaints = await prisma.complaint.findMany({ orderBy: { createdAt: 'desc' } });
     sendSuccess(res, { complaints });
   } catch (error) {
     sendError(res, error.message);

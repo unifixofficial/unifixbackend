@@ -1,12 +1,11 @@
-const admin = require('../config/firebase');
-const axios = require('axios');
-const { generateOTP, storeOTPInFirestore, verifyOTPFromFirestore, deleteOTPFromFirestore } = require('../utils/otpUtils');
+const argon2 = require('argon2');
+const prisma = require('../config/prisma');
+const { generateOTP, storeOTP, verifyOTP, deleteOTP } = require('../utils/otpUtils');
+const { signAccessToken, signRefreshToken, getRefreshExpiry } = require('../utils/jwt');
 const { sendOTPEmail } = require('../services/emailService');
 const { sendSuccess, sendError } = require('../utils/response');
 const logger = require('../services/logger');
 const { sendPushNotification, getTokensByRole } = require('../services/notificationService');
-
-const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY;
 
 const signup = async (req, res) => {
   try {
@@ -19,18 +18,11 @@ const signup = async (req, res) => {
       return sendError(res, 'Invalid college email', 400);
     }
 
-    try {
-      await admin.auth().getUserByEmail(email);
-      return sendError(res, 'Email already exists', 400);
-    } catch (authError) {
-      if (authError.code !== 'auth/user-not-found') throw authError;
-    }
-
-    const userSnapshot = await admin.firestore().collection('users').where('email', '==', email).get();
-    if (!userSnapshot.empty) return sendError(res, 'Email already exists', 400);
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) return sendError(res, 'Email already exists', 400);
 
     const otp = generateOTP();
-    await storeOTPInFirestore(email, otp, 'email-verification');
+    await storeOTP(email, otp, 'email-verification');
 
     try {
       await sendOTPEmail(email, otp, fullName, 'email-verification');
@@ -38,7 +30,7 @@ const signup = async (req, res) => {
       return sendError(res, 'Failed to send OTP email. Please try again.', 500);
     }
 
-logger.info('[Auth] OTP sent for signup', { email });
+    logger.info('[Auth] OTP sent for signup', { email });
     sendSuccess(res, { message: 'OTP sent to your email', email });
   } catch (error) {
     logger.error('[Auth] signup failed', { error: error.message });
@@ -49,37 +41,33 @@ logger.info('[Auth] OTP sent for signup', { email });
 const verifyOtp = async (req, res) => {
   try {
     const { email, otp, fullName, password, role } = req.body;
-    const isValid = await verifyOTPFromFirestore(email, otp, 'email-verification');
+    const isValid = await verifyOTP(email, otp, 'email-verification');
     if (!isValid) return sendError(res, 'Invalid or expired OTP', 400);
 
-    let userRecord;
-    try {
-      userRecord = await admin.auth().getUserByEmail(email);
-    } catch (authError) {
-      if (authError.code === 'auth/user-not-found') {
-        userRecord = await admin.auth().createUser({ email, password, displayName: fullName });
-      } else {
-        throw authError;
-      }
-    }
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) return sendError(res, 'Email already registered', 400);
 
-    const userDocRef = admin.firestore().collection('users').doc(userRecord.uid);
-    const userDoc = await userDocRef.get();
-    if (!userDoc.exists) {
-      await userDocRef.set({
-        uid: userRecord.uid,
+    const passwordHash = await argon2.hash(password);
+    const user = await prisma.user.create({
+      data: {
         email,
         fullName,
         role,
-        emailVerified: true,
+        passwordHash,
+        isVerified: true,
         profileCompleted: false,
-        createdAt: admin.firestore.Timestamp.now(),
-        lastLogin: admin.firestore.Timestamp.now(),
-      });
-    }
+      },
+    });
 
-    const token = await admin.auth().createCustomToken(userRecord.uid);
-    sendSuccess(res, { message: 'Email verified successfully', uid: userRecord.uid, token });
+    const tokenPayload = { uid: user.id, role: user.role, tokenVersion: user.tokenVersion };
+    const accessToken = signAccessToken(tokenPayload);
+    const refreshToken = signRefreshToken({ uid: user.id });
+
+    await prisma.refreshToken.create({
+      data: { userId: user.id, token: refreshToken, expiresAt: getRefreshExpiry() },
+    });
+
+    sendSuccess(res, { message: 'Email verified successfully', uid: user.id, token: accessToken, refreshToken });
   } catch (error) {
     sendError(res, error.message);
   }
@@ -92,7 +80,7 @@ const resendOtp = async (req, res) => {
     if (!email || !fullName) return sendError(res, 'Email and fullName required', 400);
 
     const otp = generateOTP();
-    await storeOTPInFirestore(email, otp, otpType);
+    await storeOTP(email, otp, otpType);
 
     try {
       await sendOTPEmail(email, otp, fullName, otpType);
@@ -111,15 +99,14 @@ const forgotPassword = async (req, res) => {
     const { email } = req.body;
     if (!email) return sendError(res, 'Email required', 400);
 
-    const userSnapshot = await admin.firestore().collection('users').where('email', '==', email).get();
-    if (userSnapshot.empty) return sendError(res, 'No account found with this email', 400);
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return sendError(res, 'No account found with this email', 400);
 
-    const userData = userSnapshot.docs[0].data();
     const otp = generateOTP();
-    await storeOTPInFirestore(email, otp, 'password-reset');
+    await storeOTP(email, otp, 'password-reset');
 
     try {
-      await sendOTPEmail(email, otp, userData.fullName || 'User', 'password-reset');
+      await sendOTPEmail(email, otp, user.fullName || 'User', 'password-reset');
     } catch {
       return sendError(res, 'Failed to send OTP email. Please try again.', 500);
     }
@@ -136,14 +123,22 @@ const verifyResetOtp = async (req, res) => {
     if (!email || !otp || !newPassword) return sendError(res, 'Missing required fields', 400);
     if (newPassword.length < 6) return sendError(res, 'Password must be at least 6 characters', 400);
 
-    const isValid = await verifyOTPFromFirestore(email, otp, 'password-reset');
+    const isValid = await verifyOTP(email, otp, 'password-reset');
     if (!isValid) return sendError(res, 'Invalid or expired OTP', 400);
 
-    const userSnapshot = await admin.firestore().collection('users').where('email', '==', email).get();
-    if (userSnapshot.empty) return sendError(res, 'User not found', 400);
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return sendError(res, 'User not found', 400);
 
-    const uid = userSnapshot.docs[0].data().uid;
-  await admin.auth().updateUser(uid, { password: newPassword });
+    const passwordHash = await argon2.hash(newPassword);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash, tokenVersion: { increment: 1 } },
+    });
+
+    await prisma.refreshToken.updateMany({
+      where: { userId: user.id },
+      data: { revoked: true },
+    });
 
     sendSuccess(res, { message: 'Password reset successfully' });
   } catch (error) {
@@ -156,8 +151,10 @@ const validateResetOtp = async (req, res) => {
     const { email, otp } = req.body;
     if (!email || !otp) return sendError(res, 'Missing required fields', 400);
 
-    const isValid = await verifyOTPFromFirestore(email, otp, 'password-reset');
+    const isValid = await verifyOTP(email, otp, 'password-reset');
     if (!isValid) return sendError(res, 'Invalid or expired OTP', 400);
+
+    await storeOTP(email, otp, 'password-reset');
 
     sendSuccess(res, { message: 'OTP is valid' });
   } catch (error) {
@@ -169,37 +166,37 @@ const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    try {
-      await axios.post(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`,
-        { email, password, returnSecureToken: true }
-      );
-    } catch (firebaseError) {
-      const code = firebaseError.response?.data?.error?.message || '';
-      if (code.includes('TOO_MANY_ATTEMPTS')) {
-        return sendError(res, 'Too many attempts. Please try again later.', 400);
-      }
-      return sendError(res, 'Invalid email or password', 400);
-    }
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return sendError(res, 'Invalid email or password', 400);
+    if (!user.isVerified) return sendError(res, 'Email not verified', 400);
+    if (user.accountStatus === 'suspended') return sendError(res, 'Account suspended', 403);
+    if (user.accountStatus === 'deleted') return sendError(res, 'Account not found', 400);
 
-    const userSnapshot = await admin.firestore().collection('users').where('email', '==', email).get();
-    if (userSnapshot.empty) return sendError(res, 'User not found', 400);
+    const valid = await argon2.verify(user.passwordHash, password);
+    if (!valid) return sendError(res, 'Invalid email or password', 400);
 
-    const user = userSnapshot.docs[0].data();
-    if (!user.emailVerified) return sendError(res, 'Email not verified', 400);
+    const tokenPayload = { uid: user.id, role: user.role, tokenVersion: user.tokenVersion };
+    const accessToken = signAccessToken(tokenPayload);
+    const refreshToken = signRefreshToken({ uid: user.id });
 
-    const token = await admin.auth().createCustomToken(user.uid);
-    await admin.firestore().collection('users').doc(user.uid).update({
-      lastLogin: admin.firestore.Timestamp.now(),
-    });
+    await prisma.$transaction([
+      prisma.refreshToken.create({
+        data: { userId: user.id, token: refreshToken, expiresAt: getRefreshExpiry() },
+      }),
+      prisma.user.update({
+        where: { id: user.id },
+        data: { lastLogin: new Date() },
+      }),
+    ]);
 
-logger.info('[Auth] Login successful', { uid: user.uid, role: user.role });
+    logger.info('[Auth] Login successful', { uid: user.id, role: user.role });
     sendSuccess(res, {
       message: 'Login successful',
-      uid: user.uid,
-      token,
+      uid: user.id,
+      token: accessToken,
+      refreshToken,
       user: {
-        uid: user.uid,
+        uid: user.id,
         fullName: user.fullName || '',
         email: user.email,
         role: user.role,
@@ -213,26 +210,67 @@ logger.info('[Auth] Login successful', { uid: user.uid, role: user.role });
   }
 };
 
+const refreshToken = async (req, res) => {
+  try {
+    const { refreshToken: token } = req.body;
+    if (!token) return sendError(res, 'Refresh token required', 400);
+
+    const { verifyRefreshToken } = require('../utils/jwt');
+    let decoded;
+    try {
+      decoded = verifyRefreshToken(token);
+    } catch {
+      return sendError(res, 'Invalid or expired refresh token', 401);
+    }
+
+    const stored = await prisma.refreshToken.findUnique({ where: { token } });
+    if (!stored || stored.revoked || new Date() > stored.expiresAt) {
+      return sendError(res, 'Refresh token invalid or expired', 401);
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: decoded.uid } });
+    if (!user || user.accountStatus === 'deleted') {
+      return sendError(res, 'User not found', 401);
+    }
+
+    const newAccessToken = signAccessToken({ uid: user.id, role: user.role, tokenVersion: user.tokenVersion });
+    const newRefreshToken = signRefreshToken({ uid: user.id });
+
+    await prisma.$transaction([
+      prisma.refreshToken.update({ where: { token }, data: { revoked: true } }),
+      prisma.refreshToken.create({
+        data: { userId: user.id, token: newRefreshToken, expiresAt: getRefreshExpiry() },
+      }),
+    ]);
+
+    sendSuccess(res, { token: newAccessToken, refreshToken: newRefreshToken });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
 const changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
-    const uid = req.user?.uid || req.uid;
+    const uid = req.user?.uid;
 
-    const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    if (!userDoc.exists) return sendError(res, 'User not found', 404);
+    const user = await prisma.user.findUnique({ where: { id: uid } });
+    if (!user) return sendError(res, 'User not found', 404);
 
-    const userEmail = userDoc.data().email;
+    const valid = await argon2.verify(user.passwordHash, currentPassword);
+    if (!valid) return sendError(res, 'Current password is incorrect', 400);
 
-    try {
-      await axios.post(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`,
-        { email: userEmail, password: currentPassword, returnSecureToken: true }
-      );
-    } catch {
-      return sendError(res, 'Current password is incorrect', 400);
-    }
+    const passwordHash = await argon2.hash(newPassword);
+    await prisma.user.update({
+      where: { id: uid },
+      data: { passwordHash, tokenVersion: { increment: 1 } },
+    });
 
-    await admin.auth().updateUser(uid, { password: newPassword });
+    await prisma.refreshToken.updateMany({
+      where: { userId: uid },
+      data: { revoked: true },
+    });
+
     sendSuccess(res, { message: 'Password changed successfully' });
   } catch (error) {
     sendError(res, error.message);
@@ -241,16 +279,56 @@ const changePassword = async (req, res) => {
 
 const updateProfile = async (req, res) => {
   try {
-const { fullName, phone } = req.body;
-    const uid = req.user?.uid || req.uid;
+    const { fullName, phone } = req.body;
+    const uid = req.user?.uid;
     if (!fullName || !fullName.trim()) return sendError(res, 'Full name is required', 400);
-    const updateData = {
-      fullName: fullName.trim(),
-      updatedAt: admin.firestore.Timestamp.now(),
-    };
+    const updateData = { fullName: fullName.trim() };
     if (phone !== undefined) updateData.phone = phone.trim();
-    await admin.firestore().collection('users').doc(uid).update(updateData);
+    await prisma.user.update({ where: { id: uid }, data: updateData });
     sendSuccess(res, { message: 'Profile updated successfully' });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
+const completeProfile = async (req, res) => {
+  try {
+    const uid = req.user?.uid;
+    const {
+      phone, gender, profileCompleted,
+      year, branch, rollNumber, studentIdCardUrl, studentIdCardName,
+      department, teacherId, teacherIdCardUrl, teacherIdCardName,
+      employeeId, designation, experience, idCardUrl, idCardName,
+      certificateUrl, certificateName, verificationStatus, rejectionMessage,
+      photoUrl,
+    } = req.body;
+
+    const updateData = {};
+    if (phone !== undefined) updateData.phone = phone;
+    if (gender !== undefined) updateData.gender = gender;
+    if (profileCompleted !== undefined) updateData.profileCompleted = profileCompleted;
+    if (year !== undefined) updateData.year = year;
+    if (branch !== undefined) updateData.branch = branch;
+    if (rollNumber !== undefined) updateData.rollNumber = rollNumber;
+    if (studentIdCardUrl !== undefined) updateData.studentIdCardUrl = studentIdCardUrl;
+    if (studentIdCardName !== undefined) updateData.studentIdCardName = studentIdCardName;
+    if (department !== undefined) updateData.department = department;
+    if (teacherId !== undefined) updateData.teacherId = teacherId;
+    if (teacherIdCardUrl !== undefined) updateData.teacherIdCardUrl = teacherIdCardUrl;
+    if (teacherIdCardName !== undefined) updateData.teacherIdCardName = teacherIdCardName;
+    if (employeeId !== undefined) updateData.employeeId = employeeId;
+    if (designation !== undefined) updateData.designation = designation;
+    if (experience !== undefined) updateData.experience = experience;
+    if (idCardUrl !== undefined) updateData.idCardUrl = idCardUrl;
+    if (idCardName !== undefined) updateData.idCardName = idCardName;
+    if (certificateUrl !== undefined) updateData.certificateUrl = certificateUrl;
+    if (certificateName !== undefined) updateData.certificateName = certificateName;
+    if (verificationStatus !== undefined) updateData.verificationStatus = verificationStatus;
+    if (rejectionMessage !== undefined) updateData.rejectionMessage = rejectionMessage;
+    if (photoUrl !== undefined) updateData.photoUrl = photoUrl;
+
+    await prisma.user.update({ where: { id: uid }, data: updateData });
+    sendSuccess(res, { message: 'Profile completed successfully' });
   } catch (error) {
     sendError(res, error.message);
   }
@@ -258,11 +336,11 @@ const { fullName, phone } = req.body;
 
 const logoutAllDevices = async (req, res) => {
   try {
-    const uid = req.user?.uid || req.uid;
-    await admin.auth().revokeRefreshTokens(uid);
-    await admin.firestore().collection('users').doc(uid).update({
-      tokensRevokedAt: admin.firestore.Timestamp.now(),
-    });
+    const uid = req.user?.uid;
+    await prisma.$transaction([
+      prisma.user.update({ where: { id: uid }, data: { tokenVersion: { increment: 1 } } }),
+      prisma.refreshToken.updateMany({ where: { userId: uid }, data: { revoked: true } }),
+    ]);
     sendSuccess(res, { message: 'Logged out from all devices successfully' });
   } catch (error) {
     sendError(res, error.message);
@@ -271,37 +349,32 @@ const logoutAllDevices = async (req, res) => {
 
 const deleteAccount = async (req, res) => {
   try {
-    const uid = req.user?.uid || req.uid;
-    const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    if (!userDoc.exists) return sendError(res, 'User not found', 404);
+    const uid = req.user?.uid;
+    const user = await prisma.user.findUnique({ where: { id: uid } });
+    if (!user) return sendError(res, 'User not found', 404);
 
-    const userData = userDoc.data();
-
-    if (userData.role === 'staff') {
-      const existing = await admin.firestore()
-        .collection('deletionRequests')
-        .where('uid', '==', uid)
-        .where('status', '==', 'pending')
-        .get();
-
-      if (!existing.empty) {
+    if (user.role === 'staff') {
+      const existing = await prisma.deletionRequest.findFirst({
+        where: { userId: uid, status: 'pending' },
+      });
+      if (existing) {
         return sendError(res, 'Deletion request already submitted and pending review', 400);
       }
 
- const delRef = await admin.firestore().collection('deletionRequests').add({
-        uid,
-        email: userData.email,
-        fullName: userData.fullName,
-        role: userData.role,
-        designation: userData.designation || null,
-        status: 'pending',
-        requestedAt: admin.firestore.Timestamp.now(),
+      const delReq = await prisma.deletionRequest.create({
+        data: {
+          userId: uid,
+          email: user.email,
+          fullName: user.fullName,
+          role: user.role,
+          designation: user.designation || null,
+        },
       });
 
-      const adminTokens = await getTokensByRole(admin.firestore(), ['admin']);
-      await sendPushNotification(adminTokens, 'New Deletion Request', `${userData.fullName} (staff) requested account deletion.`, {
+      const adminTokens = await getTokensByRole(['admin']);
+      await sendPushNotification(adminTokens, 'New Deletion Request', `${user.fullName} (staff) requested account deletion.`, {
         type: 'new_deletion_request',
-        requestId: delRef.id,
+        requestId: delReq.id,
       });
 
       return sendSuccess(res, {
@@ -310,16 +383,12 @@ const deleteAccount = async (req, res) => {
       });
     }
 
-    await admin.firestore().collection('deletionLogs').add({
-      uid,
-      email: userData.email,
-      fullName: userData.fullName,
-      role: userData.role,
-      deletedAt: admin.firestore.Timestamp.now(),
-    });
-
-    await admin.firestore().collection('users').doc(uid).delete();
-    await admin.auth().deleteUser(uid);
+    await prisma.$transaction([
+      prisma.deletionLog.create({
+        data: { uid, email: user.email, fullName: user.fullName, role: user.role },
+      }),
+      prisma.user.update({ where: { id: uid }, data: { accountStatus: 'deleted' } }),
+    ]);
 
     sendSuccess(res, { message: 'Account deleted successfully' });
   } catch (error) {
@@ -330,28 +399,27 @@ const deleteAccount = async (req, res) => {
 const reportSecurityIssue = async (req, res) => {
   try {
     const { issueType, description } = req.body;
-    const uid = req.user?.uid || req.uid;
+    const uid = req.user?.uid;
 
-    const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    if (!userDoc.exists) return sendError(res, 'User not found', 404);
+    const user = await prisma.user.findUnique({ where: { id: uid } });
+    if (!user) return sendError(res, 'User not found', 404);
 
-    const userData = userDoc.data();
-const secRef = await admin.firestore().collection('securityIssues').add({
-      uid,
-      email: userData.email,
-      fullName: userData.fullName,
-      phone: userData.phone ?? null,
-      role: userData.role,
-      issueType,
-      description: description.trim(),
-      status: 'open',
-      reportedAt: admin.firestore.Timestamp.now(),
+    const issue = await prisma.securityIssue.create({
+      data: {
+        userId: uid,
+        email: user.email,
+        fullName: user.fullName,
+        phone: user.phone || null,
+        role: user.role,
+        issueType,
+        description: description.trim(),
+      },
     });
 
-    const adminTokens = await getTokensByRole(admin.firestore(), ['admin']);
-    await sendPushNotification(adminTokens, 'New Security Issue', `${userData.fullName} reported: ${issueType}`, {
+    const adminTokens = await getTokensByRole(['admin']);
+    await sendPushNotification(adminTokens, 'New Security Issue', `${user.fullName} reported: ${issueType}`, {
       type: 'new_security_issue',
-      issueId: secRef.id,
+      issueId: issue.id,
     });
 
     sendSuccess(res, { message: 'Security issue reported successfully. Our team will review it shortly.' });
@@ -363,42 +431,37 @@ const secRef = await admin.firestore().collection('securityIssues').add({
 const requestIdCardUpdate = async (req, res) => {
   try {
     const { newIdCardUrl, newIdCardName } = req.body;
-    const uid = req.user?.uid || req.uid;
+    const uid = req.user?.uid;
 
-    const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    if (!userDoc.exists) return sendError(res, 'User not found', 404);
-
-    const userData = userDoc.data();
-    if (userData.role !== 'student' && userData.role !== 'teacher') {
+    const user = await prisma.user.findUnique({ where: { id: uid } });
+    if (!user) return sendError(res, 'User not found', 404);
+    if (user.role !== 'student' && user.role !== 'teacher') {
       return sendError(res, 'Only students and teachers can request ID card updates', 403);
     }
 
-    const existing = await admin.firestore()
-      .collection('idCardRequests')
-      .where('uid', '==', uid)
-      .where('status', '==', 'pending')
-      .get();
+    const existing = await prisma.idCardRequest.findFirst({
+      where: { userId: uid, status: 'pending' },
+    });
+    if (existing) return sendError(res, 'You already have a pending ID card update request', 400);
 
-    if (!existing.empty) {
-      return sendError(res, 'You already have a pending ID card update request', 400);
-    }
+    const currentIdCardUrl = user.role === 'student' ? user.studentIdCardUrl : user.teacherIdCardUrl;
 
-  const idCardRef = await admin.firestore().collection('idCardRequests').add({
-      uid,
-      email: userData.email,
-      fullName: userData.fullName,
-      role: userData.role,
-      newIdCardUrl,
-      newIdCardName: newIdCardName || null,
-      currentIdCardUrl: userData.studentIdCardUrl || userData.teacherIdCardUrl || null,
-      status: 'pending',
-      requestedAt: admin.firestore.Timestamp.now(),
+    const request = await prisma.idCardRequest.create({
+      data: {
+        userId: uid,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        newIdCardUrl,
+        newIdCardName: newIdCardName || null,
+        currentIdCardUrl: currentIdCardUrl || null,
+      },
     });
 
-    const adminTokens = await getTokensByRole(admin.firestore(), ['admin']);
-    await sendPushNotification(adminTokens, 'New ID Card Request', `${userData.fullName} requested an ID card update.`, {
+    const adminTokens = await getTokensByRole(['admin']);
+    await sendPushNotification(adminTokens, 'New ID Card Request', `${user.fullName} requested an ID card update.`, {
       type: 'new_idcard_request',
-      requestId: idCardRef.id,
+      requestId: request.id,
     });
 
     sendSuccess(res, { message: 'ID card update request submitted. Admin will review it shortly.' });
@@ -409,19 +472,26 @@ const requestIdCardUpdate = async (req, res) => {
 
 const myProfile = async (req, res) => {
   try {
-    const uid = req.user?.uid || req.uid;
-    const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    if (!userDoc.exists) return sendError(res, 'User not found', 404);
+    const uid = req.user?.uid;
+    const user = await prisma.user.findUnique({
+      where: { id: uid },
+      select: {
+        id: true, fullName: true, email: true, phone: true, role: true,
+        gender: true, profileCompleted: true, verificationStatus: true,
+        rejectionMessage: true, year: true, branch: true, rollNumber: true,
+        studentIdCardUrl: true, studentIdCardName: true, department: true,
+        teacherId: true, teacherIdCardUrl: true, teacherIdCardName: true,
+        employeeId: true, designation: true, experience: true,
+        avgRating: true, ratingCount: true, createdAt: true, lastLogin: true,
+      },
+    });
+    if (!user) return sendError(res, 'User not found', 404);
 
-    const { idCardBase64, certificateBase64, ...safeData } = userDoc.data();
+    const pendingIdCard = await prisma.idCardRequest.findFirst({
+      where: { userId: uid, status: 'pending' },
+    });
 
-    const pendingIdCard = await admin.firestore()
-      .collection('idCardRequests')
-      .where('uid', '==', uid)
-      .where('status', '==', 'pending')
-      .get();
-
-    sendSuccess(res, { profile: safeData, hasPendingIdCardRequest: !pendingIdCard.empty });
+    sendSuccess(res, { profile: user, hasPendingIdCardRequest: !!pendingIdCard });
   } catch (error) {
     sendError(res, error.message);
   }
@@ -430,73 +500,66 @@ const myProfile = async (req, res) => {
 const savePushToken = async (req, res) => {
   try {
     const { expoPushToken } = req.body;
-    const uid = req.user?.uid || req.uid;
+    const uid = req.user?.uid;
 
     if (!expoPushToken || !expoPushToken.startsWith('ExponentPushToken')) {
       return sendError(res, 'Invalid push token', 400);
     }
 
-  await admin.firestore().collection('users').doc(uid).update({
-      expoPushToken,
-      tokenUid: uid,
-      updatedAt: admin.firestore.Timestamp.now(),
+    await prisma.user.update({
+      where: { id: uid },
+      data: { expoPushToken, tokenUid: uid },
     });
+
     sendSuccess(res, { message: 'Push token saved successfully.' });
   } catch (error) {
     sendError(res, error.message);
   }
 };
 
-
-
-const HOD_EMAIL = process.env.HOD_EMAIL;
-
 const reportRagging = async (req, res) => {
   try {
     const { incidentDate, incidentTime, location, description, bullyDescription, isAnonymous } = req.body;
-    const uid = req.user?.uid || req.uid;
+    const uid = req.user?.uid;
 
     if (!incidentDate || !location || !description) {
       return sendError(res, 'Date, location and description are required.', 400);
     }
 
-    const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    if (!userDoc.exists) return sendError(res, 'User not found', 404);
-
-    const userData = userDoc.data();
-
-    if (userData.role !== 'student') {
-      return sendError(res, 'Only students can report ragging.', 403);
-    }
+    const user = await prisma.user.findUnique({ where: { id: uid } });
+    if (!user) return sendError(res, 'User not found', 404);
+    if (user.role !== 'student') return sendError(res, 'Only students can report ragging.', 403);
 
     const reporterInfo = isAnonymous
       ? { name: 'Anonymous', email: 'Anonymous', rollNumber: 'Hidden', branch: 'Hidden', year: 'Hidden' }
       : {
-          name: userData.fullName || 'Unknown',
-          email: userData.email || 'Unknown',
-          rollNumber: userData.rollNumber || 'N/A',
-          branch: userData.branch || 'N/A',
-          year: userData.year || 'N/A',
+          name: user.fullName || 'Unknown',
+          email: user.email || 'Unknown',
+          rollNumber: user.rollNumber || 'N/A',
+          branch: user.branch || 'N/A',
+          year: user.year || 'N/A',
         };
 
-    
-    const docRef = await admin.firestore().collection('raggingReports').add({
-      uid: isAnonymous ? 'anonymous' : uid,
-      isAnonymous,
-      reporter: reporterInfo,
-      incidentDate,
-      incidentTime: incidentTime || 'Not specified',
-      location,
-      description: description.trim(),
-      bullyDescription: bullyDescription?.trim() || 'Not provided',
-      status: 'open',
-      reportedAt: admin.firestore.Timestamp.now(),
+    const report = await prisma.raggingReport.create({
+      data: {
+        userId: isAnonymous ? null : uid,
+        isAnonymous,
+        reporterName: reporterInfo.name,
+        reporterEmail: reporterInfo.email,
+        reporterRollNumber: reporterInfo.rollNumber,
+        reporterBranch: reporterInfo.branch,
+        reporterYear: reporterInfo.year,
+        incidentDate,
+        incidentTime: incidentTime || 'Not specified',
+        location,
+        description: description.trim(),
+        bullyDescription: bullyDescription?.trim() || 'Not provided',
+      },
     });
 
-    
     const { sendRaggingReportEmail } = require('../services/emailService');
-    await sendRaggingReportEmail(HOD_EMAIL, {
-      reportId: docRef.id,
+    await sendRaggingReportEmail(process.env.HOD_EMAIL, {
+      reportId: report.id,
       isAnonymous,
       reporter: reporterInfo,
       incidentDate,
@@ -506,7 +569,7 @@ const reportRagging = async (req, res) => {
       bullyDescription: bullyDescription?.trim() || 'Not provided',
     });
 
-logger.info('[Auth] Ragging report submitted', { uid, isAnonymous });
+    logger.info('[Auth] Ragging report submitted', { uid, isAnonymous });
     sendSuccess(res, { message: 'Ragging report submitted successfully. HOD has been notified.' });
   } catch (error) {
     logger.error('[Auth] reportRagging failed', { error: error.message });
@@ -516,15 +579,13 @@ logger.info('[Auth] Ragging report submitted', { uid, isAnonymous });
 
 const notifyStaffSignup = async (req, res) => {
   try {
-    const uid = req.user?.uid || req.uid;
-    const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    if (!userDoc.exists) return sendError(res, 'User not found', 404);
+    const uid = req.user?.uid;
+    const user = await prisma.user.findUnique({ where: { id: uid } });
+    if (!user) return sendError(res, 'User not found', 404);
+    if (user.role !== 'staff') return sendSuccess(res, { message: 'Not staff, skipped' });
 
-    const userData = userDoc.data();
-    if (userData.role !== 'staff') return sendSuccess(res, { message: 'Not staff, skipped' });
-
-    const adminTokens = await getTokensByRole(admin.firestore(), ['admin']);
-    await sendPushNotification(adminTokens, 'New Staff Signup', `${userData.fullName} has registered and needs approval.`, {
+    const adminTokens = await getTokensByRole(['admin']);
+    await sendPushNotification(adminTokens, 'New Staff Signup', `${user.fullName} has registered and needs approval.`, {
       type: 'new_staff_signup',
     });
 
@@ -536,13 +597,14 @@ const notifyStaffSignup = async (req, res) => {
 
 module.exports = {
   signup,
-  notifyStaffSignup,
   verifyOtp,
+  completeProfile,
   resendOtp,
   forgotPassword,
   verifyResetOtp,
   validateResetOtp,
   login,
+  refreshToken,
   changePassword,
   updateProfile,
   logoutAllDevices,
@@ -552,4 +614,5 @@ module.exports = {
   myProfile,
   savePushToken,
   reportRagging,
+  notifyStaffSignup,
 };

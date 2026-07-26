@@ -18,9 +18,8 @@ require('./workers/cleanupWorker');
 
 const app = express();
 app.use(cors({
- origin: ['https://unifix-admin.vercel.app', 'https://unifixapp.vercel.app', 'http://localhost:5173'],
-
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  origin: ['https://unifix-admin.vercel.app', 'https://unifixapp.vercel.app', 'http://localhost:5173'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -34,22 +33,11 @@ app.use('/lost-found', require('./routes/lostFound'));
 app.use('/lost-reports', require('./routes/lostReportRoutes'));
 app.use('/analytics', require('./routes/analyticsRoutes'));
 app.use('/contact', require('./routes/contact'));
+app.use('/delete-account', require('./routes/deleteAccountRoutes'));
 
 app.get('/health', (req, res) =>
   res.json({ status: 'OK', timestamp: new Date().toISOString() })
 );
-
-app.get('/test-email', async (req, res) => {
-  try {
-    const { getTransporter } = require('./config/nodemailer');
-    const transporter = getTransporter();
-    await transporter.verify();
-    res.json({ status: 'OK', user: process.env.EMAIL_USER });
-  } catch (err) {
-    res.json({ status: 'FAILED', error: err.message });
-  }
-});
-
 
 Sentry.setupExpressErrorHandler(app);
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
@@ -62,5 +50,11 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   logger.info(`Server running on port ${PORT}`);
 });
+
+setInterval(async () => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch {}
+}, 4 * 60 * 1000);
 
 module.exports = app;

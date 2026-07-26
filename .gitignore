@@ -88,3 +88,4 @@ uploads/
 
 # Dataconnect generated files
 .dataconnect
+/generated/prisma

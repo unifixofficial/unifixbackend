@@ -1,11 +1,16 @@
-const admin = require('../config/firebase');
+const prisma = require('../config/prisma');
 const { sendSuccess, sendError } = require('../utils/response');
+const { sendPushNotification, getTokensByRole } = require('../services/notificationService');
+const logger = require('../services/logger');
 const SibApiV3Sdk = require('sib-api-v3-sdk');
+const { ESCALATION_LIMITS, NO_ACCEPTANCE_LIMITS, HOD_EMAIL_DELAY } = require('../config/escalationLimits');
+
 const getBrevoClient = () => {
   const client = SibApiV3Sdk.ApiClient.instance;
   client.authentications['api-key'].apiKey = process.env.BREVO_API_KEY;
   return new SibApiV3Sdk.TransactionalEmailsApi();
 };
+
 const sendBrevoEmail = async (to, subject, htmlContent) => {
   const api = getBrevoClient();
   await api.sendTransacEmail({
@@ -15,8 +20,6 @@ const sendBrevoEmail = async (to, subject, htmlContent) => {
     htmlContent,
   });
 };
-const logger = require('../services/logger');
-const { ESCALATION_LIMITS, NO_ACCEPTANCE_LIMITS, HOD_EMAIL_DELAY } = require('../config/escalationLimits');
 
 function capitalize(str) {
   if (!str) return '';
@@ -24,16 +27,8 @@ function capitalize(str) {
 }
 
 function cleanLocation(complaint) {
-
   const raw = `${complaint.building || ''}, ${complaint.roomDetail || ''}`;
-  return raw
-    .replace(/\s*—\s*/g, ', ')   
-    .replace(/\s*\/\s*/g, ' ')   
-    .replace(/,\s*,/g, ',')   
-    .replace(/\b(\w+)(,\s*\1)+\b/gi, '$1') 
-    .replace(/\s+/g, ' ')        
-    .trim()
-    .replace(/^,|,$/g, '');     
+  return raw.replace(/\s*—\s*/g, ', ').replace(/\s*\/\s*/g, ' ').replace(/,\s*,/g, ',').replace(/\b(\w+)(,\s*\1)+\b/gi, '$1').replace(/\s+/g, ' ').trim().replace(/^,|,$/g, '');
 }
 
 function formatElapsed(ms) {
@@ -44,20 +39,13 @@ function formatElapsed(ms) {
   return `${minutes} minute${minutes !== 1 ? 's' : ''}`;
 }
 
-function toDate(val) {
-  if (!val) return null;
-  if (val.toDate) return val.toDate();
-  if (val._seconds) return new Date(val._seconds * 1000);
-  return new Date(val);
-}
-
 async function sendEscalationHODEmail(complaint) {
-  const acceptedAt = toDate(complaint.acceptedAt);
-  const flaggedAt = toDate(complaint.flaggedAt);
-  const createdAt = toDate(complaint.createdAt);
+  const acceptedAt = complaint.acceptedAt ? new Date(complaint.acceptedAt) : null;
+  const flaggedAt = complaint.flaggedAt ? new Date(complaint.flaggedAt) : null;
+  const createdAt = complaint.createdAt ? new Date(complaint.createdAt) : null;
   const elapsed = formatElapsed(Date.now() - (acceptedAt ? acceptedAt.getTime() : createdAt ? createdAt.getTime() : Date.now()));
 
-    await sendBrevoEmail(process.env.HOD_EMAIL, `UNIFIX: Unresolved Complaint, ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`, `
+  await sendBrevoEmail(process.env.HOD_EMAIL, `UNIFIX: Unresolved Complaint, ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`, `
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
@@ -67,7 +55,7 @@ async function sendEscalationHODEmail(complaint) {
       <tr><td style="background:#0f172a;padding:24px 32px;border-radius:12px 12px 0 0;">
         <table width="100%" cellpadding="0" cellspacing="0"><tr>
           <td><p style="margin:0;font-size:20px;font-weight:800;color:#ffffff;">UNIFIX</p>
-<p style="margin:4px 0 0;font-size:12px;color:#94a3b8;text-transform:uppercase;">Campus Complaint Management, VCET</p>
+          <p style="margin:4px 0 0;font-size:12px;color:#94a3b8;text-transform:uppercase;">Campus Complaint Management, VCET</p></td>
           <td align="right"><div style="background:#dc2626;border-radius:8px;padding:8px 14px;">
             <p style="margin:0;font-size:11px;font-weight:700;color:#ffffff;text-transform:uppercase;">ESCALATED</p>
           </div></td>
@@ -89,7 +77,8 @@ async function sendEscalationHODEmail(complaint) {
           </td></tr>
           <tr><td style="padding:10px 14px;background:#ffffff;border-bottom:1px solid #f1f5f9;">
             <span style="display:block;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:3px;">Location</span>
-<span style="font-size:13px;font-weight:600;color:#0f172a;">${cleanLocation(complaint)}</span>          </td></tr>
+            <span style="font-size:13px;font-weight:600;color:#0f172a;">${cleanLocation(complaint)}</span>
+          </td></tr>
           <tr><td style="padding:10px 14px;background:#f8fafc;border-bottom:1px solid #f1f5f9;">
             <span style="display:block;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:3px;">Description</span>
             <span style="font-size:13px;font-weight:600;color:#0f172a;">${complaint.description || 'N/A'}</span>
@@ -124,20 +113,21 @@ async function sendEscalationHODEmail(complaint) {
         </div>
       </td></tr>
       <tr><td style="background:#f8fafc;padding:16px 32px;border-radius:0 0 12px 12px;border:1px solid #e2e8f0;border-top:none;">
-<p style="margin:0;font-size:11px;color:#94a3b8;">UNIFIX, Vidyavardhini's College of Engineering & Technology</p>        <p style="margin:4px 0 0;font-size:11px;color:#cbd5e1;">Automated notification. Do not reply.</p>
+        <p style="margin:0;font-size:11px;color:#94a3b8;">UNIFIX, Vidyavardhini's College of Engineering & Technology</p>
+        <p style="margin:4px 0 0;font-size:11px;color:#cbd5e1;">Automated notification. Do not reply.</p>
       </td></tr>
     </table>
   </td></tr>
 </table>
 </body></html>`);
 }
-async function sendHODResolutionEmail(complaint, resolvedBy) {
- 
-  const createdAt = toDate(complaint.createdAt);
-  const flaggedAt = toDate(complaint.flaggedAt);
-  const resolvedAt = toDate(complaint.flagResolvedAt) || new Date();
 
- await sendBrevoEmail(process.env.HOD_EMAIL, `UNIFIX: Complaint Resolved, ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`, `
+async function sendHODResolutionEmail(complaint, resolvedBy) {
+  const createdAt = complaint.createdAt ? new Date(complaint.createdAt) : null;
+  const flaggedAt = complaint.flaggedAt ? new Date(complaint.flaggedAt) : null;
+  const resolvedAt = complaint.flagResolvedAt ? new Date(complaint.flagResolvedAt) : new Date();
+
+  await sendBrevoEmail(process.env.HOD_EMAIL, `UNIFIX: Complaint Resolved, ${capitalize(complaint.category)} Issue at ${cleanLocation(complaint)}`, `
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
@@ -147,7 +137,7 @@ async function sendHODResolutionEmail(complaint, resolvedBy) {
       <tr><td style="background:#0f172a;padding:24px 32px;border-radius:12px 12px 0 0;">
         <table width="100%" cellpadding="0" cellspacing="0"><tr>
           <td><p style="margin:0;font-size:20px;font-weight:800;color:#ffffff;">UNIFIX</p>
-        <p style="margin:4px 0 0;font-size:12px;color:#94a3b8;text-transform:uppercase;">Campus Complaint Management, VCET</p></td>
+          <p style="margin:4px 0 0;font-size:12px;color:#94a3b8;text-transform:uppercase;">Campus Complaint Management, VCET</p></td>
           <td align="right"><div style="background:#16a34a;border-radius:8px;padding:8px 14px;">
             <p style="margin:0;font-size:11px;font-weight:700;color:#ffffff;text-transform:uppercase;">RESOLVED</p>
           </div></td>
@@ -169,7 +159,7 @@ async function sendHODResolutionEmail(complaint, resolvedBy) {
           </td></tr>
           <tr><td style="padding:10px 14px;background:#ffffff;border-bottom:1px solid #f1f5f9;">
             <span style="display:block;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:3px;">Location</span>
-<span style="font-size:13px;font-weight:600;color:#0f172a;">${cleanLocation(complaint)}</span>
+            <span style="font-size:13px;font-weight:600;color:#0f172a;">${cleanLocation(complaint)}</span>
           </td></tr>
           <tr><td style="padding:10px 14px;background:#f8fafc;border-bottom:1px solid #f1f5f9;">
             <span style="display:block;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:3px;">Description</span>
@@ -201,7 +191,7 @@ async function sendHODResolutionEmail(complaint, resolvedBy) {
         </div>
       </td></tr>
       <tr><td style="background:#f8fafc;padding:16px 32px;border-radius:0 0 12px 12px;border:1px solid #e2e8f0;border-top:none;">
-      <p style="margin:0;font-size:11px;color:#94a3b8;">UNIFIX, Vidyavardhini's College of Engineering & Technology</p>
+        <p style="margin:0;font-size:11px;color:#94a3b8;">UNIFIX, Vidyavardhini's College of Engineering & Technology</p>
         <p style="margin:4px 0 0;font-size:11px;color:#cbd5e1;">Automated notification. Do not reply.</p>
       </td></tr>
     </table>
@@ -210,173 +200,101 @@ async function sendHODResolutionEmail(complaint, resolvedBy) {
 </body></html>`);
 }
 
-async function notifyStudent(submittedBy, title, body, data) {
-  if (!submittedBy) return;
-  const studentSnap = await admin.firestore().collection('users').doc(submittedBy).get();
-  const token = studentSnap.exists ? studentSnap.data().expoPushToken : null;
-  if (!token || !token.startsWith('ExponentPushToken')) return;
-  await fetch('https://exp.host/--/api/v2/push/send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify([{ to: token, title, body, data, sound: 'default' }]),
-  });
-}
-
-async function processComplaint(complaint, limit, now, batch, emailPromises, notifyPromises, adminTokens) {
-  if (complaint.flagged && complaint.flagResolved && complaint.hodResolutionEmailSent) {
-    return { flagged: false, emailSent: false };
-  }
-
-  const ref = admin.firestore().collection('complaints').doc(complaint.id);
-
-  const startTime = complaint.acceptedAt
-    ? toDate(complaint.acceptedAt)
-    : toDate(complaint.createdAt);
-
-  if (!startTime) return { flagged: false, emailSent: false };
-
-  const elapsed = now - startTime.getTime();
-  let flaggedNow = false;
-  let emailSentNow = false;
-
-  if (elapsed > limit && !complaint.flagged) {
- batch.update(ref, {
-      flagged: true,
-      flaggedAt: admin.firestore.Timestamp.now(),
-      flagReason: complaint.acceptedAt ? 'unresolved' : 'no_acceptance',
-      flagResolved: false,
-      adminHandling: false,
-      hodEmailSent: false,
-      hodResolutionEmailSent: false,
-      updatedAt: admin.firestore.Timestamp.now(),
-    });
-flaggedNow = true;
-    const { scheduleHodEmail } = require('../services/schedulerService');
-    scheduleHodEmail(complaint.id);
-
-    if (adminTokens.length > 0) {
-      const reason = complaint.acceptedAt
-        ? 'has not been resolved in time'
-        : 'has not been accepted by any staff';
-      notifyPromises.push(
-        fetch('https://exp.host/--/api/v2/push/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(
-            adminTokens.map(token => ({
-              to: token,
-              title: 'Complaint Flagged',
-              body: `${complaint.category} complaint from ${complaint.submittedByName || 'a student'} ${reason}.`,
-              data: { type: 'escalation', complaintId: complaint.id },
-              sound: 'default',
-            }))
-          ),
-        })
-      );
-    }
-  }
-
-  if (complaint.flagged && !complaint.flagResolved && !complaint.hodEmailSent) {
-    const flaggedAt = toDate(complaint.flaggedAt);
-    if (flaggedAt && (now - flaggedAt.getTime()) > HOD_EMAIL_DELAY) {
-   batch.update(ref, {
-        hodEmailSent: true,
-        hodEmailSentAt: admin.firestore.Timestamp.now(),
-        updatedAt: admin.firestore.Timestamp.now(),
-      });
-      emailSentNow = true;
-      emailPromises.push(sendEscalationHODEmail(complaint));
-      notifyPromises.push(notifyStudent(
-        complaint.submittedBy,
-        'Complaint Escalated to HOD',
-        'Your complaint has been escalated to the HOD due to delay in resolution.',
-        { type: 'complaint_escalated', complaintId: complaint.id }
-      ));
-    }
-  }
-
- if (complaint.flagged && complaint.flagResolved && !complaint.hodResolutionEmailSent) {
-    batch.update(ref, { hodResolutionEmailSent: true });
-    emailSentNow = true;
-    emailPromises.push(sendHODResolutionEmail(complaint, complaint.flagResolvedBy));
-  }
-
-  const isFullyDone =
-    (complaint.flagged && complaint.flagResolved && (complaint.hodResolutionEmailSent || emailSentNow)) ||
-    (flaggedNow && complaint.flagResolved);
-
-  if (isFullyDone) {
-    batch.update(ref, { nextCheckAt: admin.firestore.Timestamp.fromMillis(now + 365 * 24 * 60 * 60 * 1000) });
-  } else if (flaggedNow && !complaint.hodEmailSent) {
-    batch.update(ref, { nextCheckAt: admin.firestore.Timestamp.fromMillis(now + HOD_EMAIL_DELAY) });
-  } else if (!flaggedNow && !complaint.flagged) {
-    // not yet escalated and limit not crossed — shouldn't happen since query filters on nextCheckAt,
-    // but as safety, push next check to the limit boundary
-    batch.update(ref, { nextCheckAt: admin.firestore.Timestamp.fromMillis(startTime.getTime() + limit) });
-  } else if (complaint.flagged && !complaint.flagResolved && complaint.hodEmailSent) {
-    // flagged, HOD already emailed, waiting for resolution — recheck later
-    batch.update(ref, { nextCheckAt: admin.firestore.Timestamp.fromMillis(now + HOD_EMAIL_DELAY) });
-  }
-
-  return { flagged: flaggedNow, emailSent: emailSentNow };
-}
-
 async function checkEscalations(req, res) {
   try {
     let flaggedCount = 0;
     let emailsSentCount = 0;
     const now = Date.now();
+    const nowDate = new Date(now);
 
-    const adminSnap = await admin.firestore()
-      .collection('users')
-      .where('role', '==', 'admin')
-      .get();
+    const adminTokens = await getTokensByRole(['admin']);
 
-    const adminTokens = adminSnap.docs
-      .map(d => d.data().expoPushToken)
-      .filter(t => t && t.startsWith('ExponentPushToken'));
-
-    const batch = admin.firestore().batch();
-    const emailPromises = [];
-    const notifyPromises = [];
-
-const nowTs = admin.firestore.Timestamp.fromMillis(now);
-
-    const [assignedSnapshot, pendingSnapshot] = await Promise.all([
-      admin.firestore()
-        .collection('complaints')
-        .where('status', 'in', ['assigned', 'in_progress'])
-        .where('nextCheckAt', '<=', nowTs)
-        .get(),
-      admin.firestore()
-        .collection('complaints')
-        .where('status', '==', 'pending')
-        .where('nextCheckAt', '<=', nowTs)
-        .get(),
+    const [assignedComplaints, pendingComplaints] = await Promise.all([
+      prisma.complaint.findMany({
+        where: { status: { in: ['assigned', 'in_progress'] }, nextCheckAt: { lte: nowDate } },
+      }),
+      prisma.complaint.findMany({
+        where: { status: 'pending', nextCheckAt: { lte: nowDate } },
+      }),
     ]);
 
-for (const docSnap of assignedSnapshot.docs) {
-      const complaint = { id: docSnap.id, ...docSnap.data() };
-     const limit = ESCALATION_LIMITS[complaint.category?.toLowerCase()];
-if (!limit) continue;
-      const result = await processComplaint(complaint, limit, now, batch, emailPromises, notifyPromises, adminTokens);
-      if (result.flagged) flaggedCount++;
-      if (result.emailSent) emailsSentCount++;
+    const processComplaint = async (complaint, limit) => {
+      if (complaint.flagged && complaint.flagResolved && complaint.hodResolutionEmailSent) return;
+
+      const startTime = complaint.acceptedAt ? new Date(complaint.acceptedAt) : complaint.createdAt ? new Date(complaint.createdAt) : null;
+      if (!startTime) return;
+
+      const elapsed = now - startTime.getTime();
+
+      if (elapsed > limit && !complaint.flagged) {
+        await prisma.complaint.update({
+          where: { id: complaint.id },
+          data: {
+            flagged: true,
+            flaggedAt: nowDate,
+            flagReason: complaint.acceptedAt ? 'unresolved' : 'no_acceptance',
+            flagResolved: false,
+            adminHandling: false,
+            hodEmailSent: false,
+            hodResolutionEmailSent: false,
+            nextCheckAt: new Date(now + HOD_EMAIL_DELAY),
+          },
+        });
+        flaggedCount++;
+
+        const { scheduleHodEmail } = require('../services/schedulerService');
+        scheduleHodEmail(complaint.id);
+
+        if (adminTokens.length > 0) {
+          const reason = complaint.acceptedAt ? 'has not been resolved in time' : 'has not been accepted by any staff';
+          await sendPushNotification(adminTokens, 'Complaint Flagged', `${complaint.category} complaint from ${complaint.submittedByName || 'a student'} ${reason}.`, { type: 'escalation', complaintId: complaint.id });
+        }
+      }
+
+      const refetched = await prisma.complaint.findUnique({ where: { id: complaint.id } });
+      if (!refetched) return;
+
+      if (refetched.flagged && !refetched.flagResolved && !refetched.hodEmailSent) {
+        const flaggedAt = refetched.flaggedAt ? new Date(refetched.flaggedAt) : null;
+        if (flaggedAt && (now - flaggedAt.getTime()) > HOD_EMAIL_DELAY) {
+          await prisma.complaint.update({
+            where: { id: complaint.id },
+            data: { hodEmailSent: true, hodEmailSentAt: nowDate, nextCheckAt: new Date(now + HOD_EMAIL_DELAY) },
+          });
+          emailsSentCount++;
+          await sendEscalationHODEmail(refetched);
+
+          if (refetched.submittedById) {
+            const { getTokenForUid } = require('../services/notificationService');
+            const tokens = await getTokenForUid(refetched.submittedById);
+            if (tokens.length > 0) {
+              await sendPushNotification(tokens, 'Complaint Escalated to HOD', 'Your complaint has been escalated to the HOD due to delay in resolution.', { type: 'complaint_escalated', complaintId: complaint.id });
+            }
+          }
+        }
+      }
+
+      if (refetched.flagged && refetched.flagResolved && !refetched.hodResolutionEmailSent) {
+        await prisma.complaint.update({
+          where: { id: complaint.id },
+          data: { hodResolutionEmailSent: true, nextCheckAt: new Date(now + 365 * 24 * 60 * 60 * 1000) },
+        });
+        emailsSentCount++;
+        await sendHODResolutionEmail(refetched, refetched.flagResolvedBy);
+      }
+    };
+
+    for (const complaint of assignedComplaints) {
+      const limit = ESCALATION_LIMITS[complaint.category?.toLowerCase()];
+      if (!limit) continue;
+      await processComplaint(complaint, limit);
     }
 
-    for (const docSnap of pendingSnapshot.docs) {
-      const complaint = { id: docSnap.id, ...docSnap.data() };
-    const limit = NO_ACCEPTANCE_LIMITS[complaint.category?.toLowerCase()];
-if (!limit) continue;
-      const result = await processComplaint(complaint, limit, now, batch, emailPromises, notifyPromises, adminTokens);
-      if (result.flagged) flaggedCount++;
-      if (result.emailSent) emailsSentCount++;
+    for (const complaint of pendingComplaints) {
+      const limit = NO_ACCEPTANCE_LIMITS[complaint.category?.toLowerCase()];
+      if (!limit) continue;
+      await processComplaint(complaint, limit);
     }
-
-if (flaggedCount > 0 || emailsSentCount > 0) {
-      await batch.commit();
-    }
-    await Promise.allSettled([...emailPromises, ...notifyPromises]);
 
     logger.info('[Escalation] Check complete', { flagged: flaggedCount, emailsSent: emailsSentCount });
     sendSuccess(res, { flagged: flaggedCount, emailsSent: emailsSentCount });
@@ -385,6 +303,5 @@ if (flaggedCount > 0 || emailsSentCount > 0) {
     sendError(res, error.message);
   }
 }
-
 
 module.exports = { checkEscalations, sendHODResolutionEmail, sendEscalationHODEmail };

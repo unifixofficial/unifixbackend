@@ -10,8 +10,8 @@ const {
 } = require('../schemas/authSchema');
 const { raggingSchema } = require('../schemas/raggingSchema');
 const {
-  signup, verifyOtp, resendOtp, forgotPassword, verifyResetOtp,
-  validateResetOtp, login, changePassword, updateProfile,
+signup, verifyOtp, resendOtp, forgotPassword, verifyResetOtp,
+  validateResetOtp, login, refreshToken, changePassword, updateProfile, completeProfile,
   logoutAllDevices, deleteAccount, reportSecurityIssue,
   requestIdCardUpdate, myProfile, savePushToken, reportRagging,
   notifyStaffSignup,
@@ -26,6 +26,8 @@ router.post('/validate-reset-otp', validateResetOtp);
 router.post('/login', authLimiter, validate(loginSchema), login);
 router.post('/change-password', verifyToken, validate(changePasswordSchema), changePassword);
 router.post('/update-profile', verifyToken, updateProfile);
+router.post('/complete-profile', verifyToken, completeProfile);
+router.post('/logout-all', verifyToken, logoutAllDevices);
 router.post('/logout-all-devices', verifyToken, logoutAllDevices);
 router.post('/delete-account', verifyToken, deleteAccount);
 router.post('/report-security-issue', verifyToken, reportSecurityIssue);
@@ -33,6 +35,7 @@ router.post('/request-idcard-update', verifyToken, requestIdCardUpdate);
 router.get('/my-profile', verifyToken, myProfile);
 router.post('/save-push-token', verifyToken, validate(savePushTokenSchema), savePushToken);
 router.post('/report-ragging', verifyToken, validate(raggingSchema), reportRagging);
+router.post('/refresh', refreshToken);
 router.post('/notify-staff-signup', verifyToken, notifyStaffSignup);
 
 module.exports = router;
