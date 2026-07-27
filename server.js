@@ -34,6 +34,7 @@ app.use('/lost-reports', require('./routes/lostReportRoutes'));
 app.use('/analytics', require('./routes/analyticsRoutes'));
 app.use('/contact', require('./routes/contact'));
 app.use('/delete-account', require('./routes/deleteAccountRoutes'));
+app.use('/master', require('./routes/masterRoutes'));
 
 app.get('/health', (req, res) =>
   res.json({ status: 'OK', timestamp: new Date().toISOString() })

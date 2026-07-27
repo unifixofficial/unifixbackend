@@ -5,16 +5,7 @@ const { createAuditLog } = require('../services/auditLogService');
 const { sendSuccess, sendError } = require('../utils/response');
 const logger = require('../services/logger');
 
-const CATEGORY_DESIGNATION_MAP = {
-  electrical: 'Electrician',
-  plumbing: 'Plumber',
-  carpentry: 'Carpenter',
-  cleaning: 'Cleaner',
-  technician: 'Technician',
-  safety: 'Safety Officer',
-  washroom: 'Cleaner',
-  others: null,
-};
+
 
 const generateTicketId = () => {
   const timestamp = Date.now().toString(36).toUpperCase();
@@ -57,26 +48,27 @@ const submit = async (req, res) => {
     let requiredDesignation = null;
     let notifyGender = null;
 
-    if (category === 'washroom') {
+const categoryRecord = await prisma.category.findFirst({
+      where: { name: { equals: category, mode: 'insensitive' } },
+    });
+    requiredDesignation = categoryRecord?.designation || null;
+
+    const isWashroom = category.toLowerCase() === 'washroom';
+    if (isWashroom) {
       if (!user.gender) return sendError(res, 'Your profile does not have a gender set. Please update your profile first.', 400);
       const staff = await prisma.user.findMany({
-        where: { role: 'staff', designation: 'Cleaner', verificationStatus: 'approved', gender: user.gender },
+        where: { role: 'staff', designation: requiredDesignation || 'Cleaner', verificationStatus: 'approved', gender: user.gender },
         select: { id: true },
       });
       assignableTo = staff.map(s => s.id);
-      requiredDesignation = 'Cleaner';
       notifyGender = user.gender;
-    } else {
-      requiredDesignation = CATEGORY_DESIGNATION_MAP[category] || null;
-      if (requiredDesignation) {
-        const staff = await prisma.user.findMany({
-          where: { role: 'staff', designation: requiredDesignation, verificationStatus: 'approved' },
-          select: { id: true },
-        });
-        assignableTo = staff.map(s => s.id);
-      }
+    } else if (requiredDesignation) {
+      const staff = await prisma.user.findMany({
+        where: { role: 'staff', designation: requiredDesignation, verificationStatus: 'approved' },
+        select: { id: true },
+      });
+      assignableTo = staff.map(s => s.id);
     }
-
     const { NO_ACCEPTANCE_LIMITS } = require('../config/escalationLimits');
     const nextCheckAt = new Date(Date.now() + (NO_ACCEPTANCE_LIMITS[category?.toLowerCase()] || 24 * 60 * 60 * 1000));
 

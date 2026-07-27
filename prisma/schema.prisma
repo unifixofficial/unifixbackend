@@ -414,6 +414,100 @@ model AuditLog {
   @@index([timestamp])
 }
 
+model Category {
+  id           String        @id @default(uuid())
+  name         String        @unique
+  iconName     String
+  color        String
+  designation  String?
+  displayOrder Int           @default(0)
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  subCategories SubCategory[]
+
+  @@index([isActive])
+  @@index([displayOrder])
+}
+
+model SubCategory {
+  id           String   @id @default(uuid())
+  categoryId   String
+  name         String
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([categoryId])
+  @@index([isActive])
+}
+
+model Building {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  code      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  floors Floor[]
+  rooms  Room[]
+}
+
+model Floor {
+  id          String   @id @default(uuid())
+  buildingId  String
+  floorNumber Int
+  floorName   String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  rooms    Room[]
+
+  @@unique([buildingId, floorNumber])
+  @@index([buildingId])
+}
+
+model Room {
+  id          String   @id @default(uuid())
+  buildingId  String
+  floorId     String?
+  roomNumber  String
+  roomName    String
+  isActive    Boolean  @default(true)
+  remark      String?
+  remarkAt    DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  floor    Floor?   @relation(fields: [floorId], references: [id], onDelete: SetNull)
+
+  @@unique([buildingId, roomNumber])
+  @@index([buildingId])
+  @@index([floorId])
+  @@index([isActive])
+}
+
+model LostFoundCategory {
+  id           String   @id @default(uuid())
+  name         String   @unique
+  type         String
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([type])
+  @@index([isActive])
+}
+
 model NotificationLog {
   id           String             @id @default(uuid())
   recipientId  String?
