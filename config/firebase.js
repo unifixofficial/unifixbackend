@@ -2,16 +2,22 @@ const admin = require('firebase-admin');
 
 let serviceAccount;
 
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  if (serviceAccount.private_key) {
-    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
-  }
+if (process.env.FIREBASE_PROJECT_ID) {
+  serviceAccount = {
+    type: "service_account",
+    project_id: process.env.FIREBASE_PROJECT_ID,
+    private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+    private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    client_email: process.env.FIREBASE_CLIENT_EMAIL,
+    client_id: process.env.FIREBASE_CLIENT_ID,
+    auth_uri: "https://accounts.google.com/o/oauth2/auth",
+    token_uri: "https://oauth2.googleapis.com/token",
+  };
 } else {
   try {
     serviceAccount = require('../serviceAccountKey.json');
   } catch {
-    console.error('serviceAccountKey.json not found and FIREBASE_SERVICE_ACCOUNT env not set. Exiting.');
+    console.error('serviceAccountKey.json not found and Firebase env vars not set. Exiting.');
     process.exit(1);
   }
 }
