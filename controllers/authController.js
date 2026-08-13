@@ -1,5 +1,6 @@
 const argon2 = require('argon2');
 const prisma = require('../config/prisma');
+const admin = require('../config/firebase');
 const { generateOTP, storeOTP, verifyOTP, deleteOTP } = require('../utils/otpUtils');
 const { signAccessToken, signRefreshToken, getRefreshExpiry } = require('../utils/jwt');
 const { sendOTPEmail } = require('../services/emailService');
@@ -337,16 +338,21 @@ const completeProfile = async (req, res) => {
 const logoutAllDevices = async (req, res) => {
   try {
     const uid = req.user?.uid;
-    await prisma.$transaction([
-      prisma.user.update({ where: { id: uid }, data: { tokenVersion: { increment: 1 } } }),
-      prisma.refreshToken.updateMany({ where: { userId: uid }, data: { revoked: true } }),
-    ]);
+    const { fcmToken } = req.body;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: uid }, data: { tokenVersion: { increment: 1 } } });
+      await tx.refreshToken.updateMany({ where: { userId: uid }, data: { revoked: true } });
+      if (fcmToken) {
+        await tx.deviceToken.deleteMany({ where: { userId: uid, token: fcmToken } });
+      }
+    });
+
     sendSuccess(res, { message: 'Logged out from all devices successfully' });
   } catch (error) {
     sendError(res, error.message);
   }
 };
-
 const deleteAccount = async (req, res) => {
   try {
     const uid = req.user?.uid;
@@ -499,16 +505,19 @@ const myProfile = async (req, res) => {
 
 const savePushToken = async (req, res) => {
   try {
-    const { expoPushToken } = req.body;
+    const { fcmToken } = req.body;
     const uid = req.user?.uid;
 
-    if (!expoPushToken || !expoPushToken.startsWith('ExponentPushToken')) {
-      return sendError(res, 'Invalid push token', 400);
+    if (!fcmToken || typeof fcmToken !== 'string' || fcmToken.length < 10) {
+      return sendError(res, 'Invalid FCM token', 400);
     }
 
-    await prisma.user.update({
-      where: { id: uid },
-      data: { expoPushToken, tokenUid: uid },
+    const platform = req.headers['x-platform'] || null;
+
+    await prisma.deviceToken.upsert({
+      where: { userId_token: { userId: uid, token: fcmToken } },
+      update: { updatedAt: new Date(), platform },
+      create: { userId: uid, token: fcmToken, platform },
     });
 
     sendSuccess(res, { message: 'Push token saved successfully.' });
@@ -577,6 +586,189 @@ const reportRagging = async (req, res) => {
   }
 };
 
+const firebaseAuth = async (req, res) => {
+  try {
+    const { idToken } = req.body;
+
+let decoded;
+    try {
+      decoded = await admin.auth().verifyIdToken(idToken);
+    } catch (tokenErr) {
+      logger.error('[Auth] Firebase token verification failed', { error: tokenErr.message, code: tokenErr.code });
+      return sendError(res, `Token verification failed: ${tokenErr.message}`, 401);
+    }
+
+    if (!decoded.email_verified) {
+      return sendError(res, 'Your Google account email is not verified. Please verify it and try again.', 403);
+    }
+
+    const rawEmail = decoded.email || '';
+    const email = rawEmail.trim().toLowerCase();
+    const firebaseUid = decoded.uid;
+    const displayName = decoded.name || '';
+
+    if (!email.endsWith('@vcet.edu.in')) {
+      return sendError(res, 'Only VCET email accounts ending with @vcet.edu.in are allowed.', 403);
+    }
+
+let user = await prisma.user.findUnique({
+      where: { firebaseUid },
+      select: {
+        id: true, fullName: true, email: true, phone: true, role: true,
+        gender: true, profileCompleted: true, accountStatus: true,
+        verificationStatus: true, rejectionMessage: true, firebaseUid: true,
+        tokenVersion: true, year: true, branch: true, rollNumber: true,
+        studentIdCardUrl: true, department: true, teacherId: true,
+        teacherIdCardUrl: true, employeeId: true, designation: true,
+        experience: true,profilePhoto: true,
+      },
+    });
+
+    if (!user) {
+    const existingByEmail = await prisma.user.findUnique({
+          where: { email },
+          select: {
+            id: true, fullName: true, email: true, phone: true, role: true,
+            gender: true, profileCompleted: true, accountStatus: true,
+            verificationStatus: true, rejectionMessage: true, firebaseUid: true,
+            passwordHash: true, tokenVersion: true, year: true, branch: true,
+            rollNumber: true, studentIdCardUrl: true, department: true,
+            teacherId: true, teacherIdCardUrl: true, employeeId: true,
+            designation: true, experience: true, photoUrl: true,
+          },
+        });
+
+      if (existingByEmail) {
+        if (existingByEmail.passwordHash && !existingByEmail.firebaseUid) {
+          return res.status(409).json({
+            success: false,
+            code: 'EXISTING_PASSWORD_ACCOUNT',
+            error: 'This email already has an existing UniFiX account. Please log in using your email and password.',
+          });
+        }
+        user = await prisma.user.update({
+          where: { id: existingByEmail.id },
+          data: { firebaseUid, lastLogin: new Date() },
+        });
+      } else {
+        user = await prisma.$transaction(async (tx) => {
+          const existing = await tx.user.findUnique({ where: { email } });
+          if (existing) {
+            return tx.user.update({
+              where: { id: existing.id },
+              data: { firebaseUid, lastLogin: new Date() },
+            });
+          }
+   return tx.user.create({
+            data: {
+              email,
+              fullName: displayName || email.split('@')[0],
+              firebaseUid,
+              role: 'student',
+              isVerified: true,
+              profileCompleted: false,
+              accountStatus: 'active',
+            },
+          });
+        });
+      }
+    } else {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { lastLogin: new Date() },
+      });
+    }
+
+    if (user.accountStatus === 'suspended') {
+      return sendError(res, 'Your account has been suspended. Please contact support.', 403);
+    }
+    if (user.accountStatus === 'deleted') {
+      return sendError(res, 'Account not found.', 400);
+    }
+
+    const isNewUser = !user.role;
+
+    const tokenPayload = { uid: user.id, role: user.role || 'student', tokenVersion: user.tokenVersion };
+    const accessToken = signAccessToken(tokenPayload);
+    const refreshToken = signRefreshToken({ uid: user.id });
+
+    await prisma.refreshToken.create({
+      data: { userId: user.id, token: refreshToken, expiresAt: getRefreshExpiry() },
+    });
+
+    logger.info('[Auth] Firebase Google login', { uid: user.id, email, isNewUser });
+
+sendSuccess(res, {
+      message: 'Authentication successful',
+      uid: user.id,
+      token: accessToken,
+      refreshToken,
+      user: {
+        uid: user.id,
+        fullName: user.fullName || '',
+        email: user.email,
+        phone: user.phone || null,
+        role: user.role,
+        gender: user.gender || null,
+        profileCompleted: user.profileCompleted || false,
+        verificationStatus: user.verificationStatus || null,
+        rejectionMessage: user.rejectionMessage || null,
+        year: user.year || null,
+        branch: user.branch || null,
+        rollNumber: user.rollNumber || null,
+        studentIdCardUrl: user.studentIdCardUrl || null,
+        department: user.department || null,
+        teacherId: user.teacherId || null,
+        teacherIdCardUrl: user.teacherIdCardUrl || null,
+        employeeId: user.employeeId || null,
+        designation: user.designation || null,
+        experience: user.experience || null,
+    photoUrl: user.profilePhoto || null,
+        isNewUser,
+      },
+    });
+  } catch (error) {
+    logger.error('[Auth] firebaseAuth failed', { error: error.message });
+    sendError(res, 'Authentication failed. Please try again.', 500);
+  }
+};
+
+const selectRole = async (req, res) => {
+  try {
+    const uid = req.user?.uid;
+    const { role } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { id: uid } });
+    if (!user) return sendError(res, 'User not found', 404);
+
+    if (user.role) {
+      return sendError(res, 'Role already assigned', 400);
+    }
+
+    await prisma.user.update({
+      where: { id: uid },
+      data: { role },
+    });
+
+    const newTokenPayload = { uid: user.id, role, tokenVersion: user.tokenVersion };
+    const newAccessToken = signAccessToken(newTokenPayload);
+    const newRefreshToken = signRefreshToken({ uid: user.id });
+
+    await prisma.refreshToken.create({
+      data: { userId: user.id, token: newRefreshToken, expiresAt: getRefreshExpiry() },
+    });
+
+    sendSuccess(res, {
+      message: 'Role selected',
+      token: newAccessToken,
+      refreshToken: newRefreshToken,
+    });
+  } catch (error) {
+    logger.error('[Auth] selectRole failed', { error: error.message });
+    sendError(res, error.message);
+  }
+};
+
 const notifyStaffSignup = async (req, res) => {
   try {
     const uid = req.user?.uid;
@@ -594,11 +786,27 @@ const notifyStaffSignup = async (req, res) => {
     sendError(res, error.message);
   }
 };
+const removePushToken = async (req, res) => {
+  try {
+    const { fcmToken } = req.body;
+    const uid = req.user?.uid;
+
+    if (fcmToken) {
+      await prisma.deviceToken.deleteMany({ where: { userId: uid, token: fcmToken } });
+    }
+
+    sendSuccess(res, { message: 'Push token removed successfully.' });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
 
 module.exports = {
   signup,
   verifyOtp,
   completeProfile,
+  firebaseAuth,
+  selectRole,
   resendOtp,
   forgotPassword,
   verifyResetOtp,
@@ -613,6 +821,7 @@ module.exports = {
   requestIdCardUpdate,
   myProfile,
   savePushToken,
+  removePushToken,
   reportRagging,
   notifyStaffSignup,
 };

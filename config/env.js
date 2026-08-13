@@ -9,8 +9,10 @@ const required = [
   'REDIS_URL',
   'CLOUDINARY_CLOUD_NAME',
   'CLOUDINARY_UPLOAD_PRESET',
+  'FIREBASE_PROJECT_ID',
+  'FIREBASE_CLIENT_EMAIL',
+  'FIREBASE_PRIVATE_KEY',
 ];
-
 required.forEach((key) => {
   if (!process.env[key]) {
     console.error(`[ENV] Missing required environment variable: ${key}`);

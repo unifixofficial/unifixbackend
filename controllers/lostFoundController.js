@@ -53,7 +53,7 @@ const feed = async (req, res) => {
         orderBy: { updatedAt: 'desc' },
       });
       return sendSuccess(res, {
-        items: items.map(i => ({ ...i, isMyPost: i.postedById === uid })),
+    items: items.map(i => ({ ...i, postedBy: i.postedById, createdAt: i.createdAt?.getTime() ?? null, updatedAt: i.updatedAt?.getTime() ?? null, handedAt: i.handedAt?.getTime() ?? null, isMyPost: i.postedById === uid })),
         nextCursor: null,
         hasMore: false,
       });
@@ -150,7 +150,7 @@ const myPosts = async (req, res) => {
       orderBy: { createdAt: 'desc' },
     });
 
-    sendSuccess(res, { items: items.map(i => ({ ...i, isMyPost: true })) });
+  sendSuccess(res, { items: items.map(i => ({ ...i, postedBy: i.postedById, createdAt: i.createdAt?.getTime() ?? null, updatedAt: i.updatedAt?.getTime() ?? null, handedAt: i.handedAt?.getTime() ?? null, isMyPost: true })) });
   } catch (error) {
     sendError(res, error.message);
   }

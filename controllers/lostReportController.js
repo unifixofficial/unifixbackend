@@ -31,8 +31,10 @@ const post = async (req, res) => {
       },
     });
 
-    const ownerTokens = await getTokenForUid(uid);
+const ownerTokens = await getTokenForUid(uid);
     const otherTokens = await getTokensByRole(['student', 'teacher'], uid);
+    console.log('[markFound] ownerTokens:', ownerTokens);
+    console.log('[markFound] otherTokens:', otherTokens);
 
     if (ownerTokens.length > 0) {
       await sendPushNotification(ownerTokens, 'Lost Item Report', `You posted a lost item report: ${itemName.trim()}`, { type: 'new_lost_report', reportId: report.id });

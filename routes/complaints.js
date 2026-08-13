@@ -3,8 +3,10 @@ const router = express.Router();
 const prisma = require('../config/prisma');
 const verifyToken = require('../middleware/verifyToken');
 const { submitComplaintValidator, rateComplaintValidator } = require('../validators/complaintValidator');
-const { submit, accept, updateStatus, reject, rate, myComplaints, staffComplaints, allComplaints } = require('../controllers/complaintController');
+const { submit, accept, updateStatus, reject, rate, myComplaints, staffComplaints, allComplaints, getSettings, updateSettings } = require('../controllers/complaintController');
 
+router.get('/settings', getSettings);
+router.put('/settings', verifyToken, updateSettings);
 router.post('/submit', verifyToken, submitComplaintValidator, submit);
 router.post('/accept', verifyToken, accept);
 router.post('/update-status', verifyToken, updateStatus);

@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const { toZonedTime, fromZonedTime } = require('date-fns-tz');
 const { sendPushNotification, getTokensByDesignation, getTokenForUid } = require('../services/notificationService');
 const { scheduleEscalation, cancelEscalation } = require('../services/schedulerService');
 const { createAuditLog } = require('../services/auditLogService');
@@ -6,6 +7,128 @@ const { sendSuccess, sendError } = require('../utils/response');
 const logger = require('../services/logger');
 
 
+
+const getComplaintSettings = async () => {
+  let settings = await prisma.complaintSettings.findUnique({ where: { id: 'singleton' } });
+  if (!settings) {
+    settings = await prisma.complaintSettings.create({ data: { id: 'singleton' } });
+  }
+  return settings;
+};
+
+const isComplaintOpen = (settings) => {
+  if (!settings.isEnabled) return { open: false, reason: 'disabled' };
+  const tz = settings.timezone || 'Asia/Kolkata';
+  const now = toZonedTime(new Date(), tz);
+  const day = now.getDay();
+  const dayMap = [
+    settings.sundayEnabled,
+    settings.mondayEnabled,
+    settings.tuesdayEnabled,
+    settings.wednesdayEnabled,
+    settings.thursdayEnabled,
+    settings.fridayEnabled,
+    settings.saturdayEnabled,
+  ];
+  if (!dayMap[day]) return { open: false, reason: 'day' };
+  const hh = now.getHours();
+  const mm = now.getMinutes();
+  const currentMinutes = hh * 60 + mm;
+  const [openH, openM] = settings.openingTime.split(':').map(Number);
+  const [closeH, closeM] = settings.closingTime.split(':').map(Number);
+  const openMinutes = openH * 60 + openM;
+  const closeMinutes = closeH * 60 + closeM;
+  if (currentMinutes < openMinutes || currentMinutes >= closeMinutes) return { open: false, reason: 'time' };
+  return { open: true };
+};
+
+const buildClosedMessage = (settings) => {
+  if (settings.closedMessage) return settings.closedMessage;
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const dayMap = [settings.sundayEnabled, settings.mondayEnabled, settings.tuesdayEnabled, settings.wednesdayEnabled, settings.thursdayEnabled, settings.fridayEnabled, settings.saturdayEnabled];
+  const enabledDays = days.filter((_, i) => dayMap[i]);
+  const dayStr = enabledDays.length > 0 ? enabledDays.join(', ') : 'No days configured';
+  return `Complaint submissions are currently closed. Available: ${dayStr}, ${settings.openingTime} - ${settings.closingTime} (${settings.timezone}).`;
+};
+
+const getSettings = async (req, res) => {
+  try {
+    const settings = await getComplaintSettings();
+    const dayMap = {
+      monday: settings.mondayEnabled,
+      tuesday: settings.tuesdayEnabled,
+      wednesday: settings.wednesdayEnabled,
+      thursday: settings.thursdayEnabled,
+      friday: settings.fridayEnabled,
+      saturday: settings.saturdayEnabled,
+      sunday: settings.sundayEnabled,
+    };
+    sendSuccess(res, {
+      enabled: settings.isEnabled,
+      timezone: settings.timezone,
+      openingTime: settings.openingTime,
+      closingTime: settings.closingTime,
+      workingDays: dayMap,
+      closedMessage: settings.closedMessage || null,
+      isCurrentlyOpen: isComplaintOpen(settings).open,
+    });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
+
+const updateSettings = async (req, res) => {
+  try {
+    const uid = req.user?.uid;
+    const { isEnabled, timezone, openingTime, closingTime, workingDays, closedMessage } = req.body;
+    const existing = await getComplaintSettings();
+    const updateData = {};
+    if (isEnabled !== undefined) updateData.isEnabled = Boolean(isEnabled);
+    if (timezone !== undefined) updateData.timezone = timezone;
+    if (openingTime !== undefined) updateData.openingTime = openingTime;
+    if (closingTime !== undefined) updateData.closingTime = closingTime;
+    if (closedMessage !== undefined) updateData.closedMessage = closedMessage || null;
+    if (workingDays && typeof workingDays === 'object') {
+      if (workingDays.monday !== undefined) updateData.mondayEnabled = Boolean(workingDays.monday);
+      if (workingDays.tuesday !== undefined) updateData.tuesdayEnabled = Boolean(workingDays.tuesday);
+      if (workingDays.wednesday !== undefined) updateData.wednesdayEnabled = Boolean(workingDays.wednesday);
+      if (workingDays.thursday !== undefined) updateData.thursdayEnabled = Boolean(workingDays.thursday);
+      if (workingDays.friday !== undefined) updateData.fridayEnabled = Boolean(workingDays.friday);
+      if (workingDays.saturday !== undefined) updateData.saturdayEnabled = Boolean(workingDays.saturday);
+      if (workingDays.sunday !== undefined) updateData.sundayEnabled = Boolean(workingDays.sunday);
+    }
+    if (uid) updateData.updatedById = uid;
+    const updated = await prisma.complaintSettings.update({ where: { id: 'singleton' }, data: updateData });
+    await createAuditLog({
+      action: 'complaint_settings_updated',
+      performedBy: uid,
+      performedByRole: 'admin',
+      targetId: 'singleton',
+      targetType: 'complaint_settings',
+      metadata: { previous: existing, updated: updateData },
+    });
+    const dayMap = {
+      monday: updated.mondayEnabled,
+      tuesday: updated.tuesdayEnabled,
+      wednesday: updated.wednesdayEnabled,
+      thursday: updated.thursdayEnabled,
+      friday: updated.fridayEnabled,
+      saturday: updated.saturdayEnabled,
+      sunday: updated.sundayEnabled,
+    };
+    sendSuccess(res, {
+      enabled: updated.isEnabled,
+      timezone: updated.timezone,
+      openingTime: updated.openingTime,
+      closingTime: updated.closingTime,
+      workingDays: dayMap,
+      closedMessage: updated.closedMessage || null,
+      isCurrentlyOpen: isComplaintOpen(updated).open,
+    });
+  } catch (error) {
+    sendError(res, error.message);
+  }
+};
 
 const generateTicketId = () => {
   const timestamp = Date.now().toString(36).toUpperCase();
@@ -32,8 +155,9 @@ const notifyStaffMember = async (staffUid, title, body, data) => {
 
 const submit = async (req, res) => {
   try {
-    const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-    if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
+    const settings = await getComplaintSettings();
+    const availability = isComplaintOpen(settings);
+    if (!availability.open) return sendError(res, buildClosedMessage(settings), 403);
 
     const { category, subIssue, customIssue, description, building, roomDetail, photoUrl } = req.body;
     const uid = req.user.uid;
@@ -121,8 +245,9 @@ const categoryRecord = await prisma.category.findFirst({
 
 const accept = async (req, res) => {
   try {
-    const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-    if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
+    const settings = await getComplaintSettings();
+    const availability = isComplaintOpen(settings);
+    if (!availability.open) return sendError(res, buildClosedMessage(settings), 403);
 
     const { complaintId } = req.body;
     const uid = req.user.uid;
@@ -176,8 +301,9 @@ const accept = async (req, res) => {
 
 const updateStatus = async (req, res) => {
   try {
-    const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-    if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
+    const settings = await getComplaintSettings();
+    const availability = isComplaintOpen(settings);
+    if (!availability.open) return sendError(res, buildClosedMessage(settings), 403);
 
     const { complaintId, status } = req.body;
     const uid = req.user.uid;
@@ -241,8 +367,9 @@ const updateStatus = async (req, res) => {
 
 const reject = async (req, res) => {
   try {
-    const istHour = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCHours();
-    if (istHour < 8 || istHour >= 20) return sendError(res, 'Complaint system is only available between 8:00 AM and 8:00 PM IST.', 403);
+    const settings = await getComplaintSettings();
+    const availability = isComplaintOpen(settings);
+    if (!availability.open) return sendError(res, buildClosedMessage(settings), 403);
 
     const { complaintId, reason } = req.body;
     if (!complaintId || !reason) return sendError(res, 'complaintId and reason are required.', 400);
@@ -410,4 +537,4 @@ const allComplaints = async (req, res) => {
   }
 };
 
-module.exports = { submit, accept, updateStatus, reject, rate, myComplaints, staffComplaints, allComplaints };
+module.exports = { submit, accept, updateStatus, reject, rate, myComplaints, staffComplaints, allComplaints, getSettings, updateSettings };

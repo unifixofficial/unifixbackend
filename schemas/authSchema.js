@@ -36,7 +36,15 @@ const changePasswordSchema = Joi.object({
 });
 
 const savePushTokenSchema = Joi.object({
-  expoPushToken: Joi.string().pattern(/^ExponentPushToken/).required(),
+  fcmToken: Joi.string().min(10).required(),
+});
+
+const firebaseAuthSchema = Joi.object({
+  idToken: Joi.string().min(10).required(),
+});
+
+const selectRoleSchema = Joi.object({
+  role: Joi.string().valid('student', 'teacher').required(),
 });
 
 module.exports = {
@@ -47,4 +55,6 @@ module.exports = {
   verifyResetOtpSchema,
   changePasswordSchema,
   savePushTokenSchema,
+  firebaseAuthSchema,
+  selectRoleSchema,
 };

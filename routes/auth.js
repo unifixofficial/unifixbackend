@@ -10,12 +10,13 @@ const {
 } = require('../schemas/authSchema');
 const { raggingSchema } = require('../schemas/raggingSchema');
 const {
-signup, verifyOtp, resendOtp, forgotPassword, verifyResetOtp,
+  signup, verifyOtp, resendOtp, forgotPassword, verifyResetOtp,
   validateResetOtp, login, refreshToken, changePassword, updateProfile, completeProfile,
   logoutAllDevices, deleteAccount, reportSecurityIssue,
-  requestIdCardUpdate, myProfile, savePushToken, reportRagging,
-  notifyStaffSignup,
+  requestIdCardUpdate, myProfile, savePushToken, removePushToken, reportRagging,
+  notifyStaffSignup, firebaseAuth, selectRole,
 } = require('../controllers/authController');
+const { firebaseAuthSchema, selectRoleSchema } = require('../schemas/authSchema');
 
 router.post('/signup', authLimiter, validate(signupSchema), signup);
 router.post('/verify-otp', otpLimiter, validate(verifyOtpSchema), verifyOtp);
@@ -29,6 +30,7 @@ router.post('/update-profile', verifyToken, updateProfile);
 router.post('/complete-profile', verifyToken, completeProfile);
 router.post('/logout-all', verifyToken, logoutAllDevices);
 router.post('/logout-all-devices', verifyToken, logoutAllDevices);
+router.post('/remove-push-token', verifyToken, removePushToken);
 router.post('/delete-account', verifyToken, deleteAccount);
 router.post('/report-security-issue', verifyToken, reportSecurityIssue);
 router.post('/request-idcard-update', verifyToken, requestIdCardUpdate);
@@ -37,5 +39,7 @@ router.post('/save-push-token', verifyToken, validate(savePushTokenSchema), save
 router.post('/report-ragging', verifyToken, validate(raggingSchema), reportRagging);
 router.post('/refresh', refreshToken);
 router.post('/notify-staff-signup', verifyToken, notifyStaffSignup);
+router.post('/firebase', authLimiter, validate(firebaseAuthSchema), firebaseAuth);
+router.post('/select-role', verifyToken, validate(selectRoleSchema), selectRole);
 
 module.exports = router;
