@@ -103,6 +103,14 @@ const forgotPassword = async (req, res) => {
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) return sendError(res, 'No account found with this email', 400);
 
+    if (user.firebaseUid && !user.passwordHash) {
+      return res.status(400).json({
+        success: false,
+        code: 'GOOGLE_ACCOUNT',
+        error: 'Your email is verified with Google. Please continue with Google.',
+      });
+    }
+
     const otp = generateOTP();
     await storeOTP(email, otp, 'password-reset');
 
@@ -172,6 +180,14 @@ const login = async (req, res) => {
     if (!user.isVerified) return sendError(res, 'Email not verified', 400);
     if (user.accountStatus === 'suspended') return sendError(res, 'Account suspended', 403);
     if (user.accountStatus === 'deleted') return sendError(res, 'Account not found', 400);
+
+    if (user.firebaseUid && !user.passwordHash) {
+      return res.status(400).json({
+        success: false,
+        code: 'GOOGLE_ACCOUNT',
+        error: 'Your email is verified with Google. Please continue with Google.',
+      });
+    }
 
     const valid = await argon2.verify(user.passwordHash, password);
     if (!valid) return sendError(res, 'Invalid email or password', 400);
@@ -300,8 +316,8 @@ const completeProfile = async (req, res) => {
       year, branch, rollNumber, studentIdCardUrl, studentIdCardName,
       department, teacherId, teacherIdCardUrl, teacherIdCardName,
       employeeId, designation, experience, idCardUrl, idCardName,
-      certificateUrl, certificateName, verificationStatus, rejectionMessage,
-      photoUrl,
+   certificateUrl, certificateName, verificationStatus, rejectionMessage,
+      profilePhoto,
     } = req.body;
 
     const updateData = {};
@@ -326,7 +342,7 @@ const completeProfile = async (req, res) => {
     if (certificateName !== undefined) updateData.certificateName = certificateName;
     if (verificationStatus !== undefined) updateData.verificationStatus = verificationStatus;
     if (rejectionMessage !== undefined) updateData.rejectionMessage = rejectionMessage;
-    if (photoUrl !== undefined) updateData.photoUrl = photoUrl;
+if (profilePhoto !== undefined) updateData.profilePhoto = profilePhoto;
 
     await prisma.user.update({ where: { id: uid }, data: updateData });
     sendSuccess(res, { message: 'Profile completed successfully' });
@@ -514,12 +530,15 @@ const savePushToken = async (req, res) => {
 
     const platform = req.headers['x-platform'] || null;
 
+await prisma.deviceToken.deleteMany({
+      where: { token: fcmToken, userId: { not: uid } },
+    });
+
     await prisma.deviceToken.upsert({
       where: { userId_token: { userId: uid, token: fcmToken } },
       update: { updatedAt: new Date(), platform },
       create: { userId: uid, token: fcmToken, platform },
     });
-
     sendSuccess(res, { message: 'Push token saved successfully.' });
   } catch (error) {
     sendError(res, error.message);
@@ -634,7 +653,7 @@ let user = await prisma.user.findUnique({
             passwordHash: true, tokenVersion: true, year: true, branch: true,
             rollNumber: true, studentIdCardUrl: true, department: true,
             teacherId: true, teacherIdCardUrl: true, employeeId: true,
-            designation: true, experience: true, photoUrl: true,
+     designation: true, experience: true, profilePhoto: true,
           },
         });
 
@@ -659,12 +678,11 @@ let user = await prisma.user.findUnique({
               data: { firebaseUid, lastLogin: new Date() },
             });
           }
-   return tx.user.create({
+return tx.user.create({
             data: {
               email,
               fullName: displayName || email.split('@')[0],
               firebaseUid,
-              role: 'student',
               isVerified: true,
               profileCompleted: false,
               accountStatus: 'active',
@@ -686,9 +704,9 @@ let user = await prisma.user.findUnique({
       return sendError(res, 'Account not found.', 400);
     }
 
-    const isNewUser = !user.role;
+  const isNewUser = !user.role;
 
-    const tokenPayload = { uid: user.id, role: user.role || 'student', tokenVersion: user.tokenVersion };
+    const tokenPayload = { uid: user.id, role: user.role ?? 'student', tokenVersion: user.tokenVersion };
     const accessToken = signAccessToken(tokenPayload);
     const refreshToken = signRefreshToken({ uid: user.id });
 
@@ -741,7 +759,7 @@ const selectRole = async (req, res) => {
     const user = await prisma.user.findUnique({ where: { id: uid } });
     if (!user) return sendError(res, 'User not found', 404);
 
-    if (user.role) {
+ if (user.role && user.profileCompleted) {
       return sendError(res, 'Role already assigned', 400);
     }
 
