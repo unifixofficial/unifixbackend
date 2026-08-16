@@ -206,7 +206,7 @@ const login = async (req, res) => {
       }),
     ]);
 
-    logger.info('[Auth] Login successful', { uid: user.id, role: user.role });
+logger.info('[Auth] Login successful', { uid: user.id, role: user.role });
     sendSuccess(res, {
       message: 'Login successful',
       uid: user.id,
@@ -219,6 +219,7 @@ const login = async (req, res) => {
         role: user.role,
         profileCompleted: user.profileCompleted || false,
         verificationStatus: user.verificationStatus || null,
+        authProvider: 'email',
       },
     });
   } catch (error) {
@@ -317,8 +318,9 @@ const completeProfile = async (req, res) => {
       department, teacherId, teacherIdCardUrl, teacherIdCardName,
       employeeId, designation, experience, idCardUrl, idCardName,
    certificateUrl, certificateName, verificationStatus, rejectionMessage,
-      profilePhoto,
+      profilePhoto, photoUrl,
     } = req.body;
+    const resolvedPhotoUrl = photoUrl !== undefined ? photoUrl : profilePhoto;
 
     const updateData = {};
     if (phone !== undefined) updateData.phone = phone;
@@ -342,7 +344,7 @@ const completeProfile = async (req, res) => {
     if (certificateName !== undefined) updateData.certificateName = certificateName;
     if (verificationStatus !== undefined) updateData.verificationStatus = verificationStatus;
     if (rejectionMessage !== undefined) updateData.rejectionMessage = rejectionMessage;
-if (profilePhoto !== undefined) updateData.profilePhoto = profilePhoto;
+if (resolvedPhotoUrl !== undefined) updateData.profilePhoto = resolvedPhotoUrl;
 
     await prisma.user.update({ where: { id: uid }, data: updateData });
     sendSuccess(res, { message: 'Profile completed successfully' });
@@ -505,6 +507,7 @@ const myProfile = async (req, res) => {
         teacherId: true, teacherIdCardUrl: true, teacherIdCardName: true,
         employeeId: true, designation: true, experience: true,
         avgRating: true, ratingCount: true, createdAt: true, lastLogin: true,
+        firebaseUid: true, passwordHash: true, profilePhoto: true,
       },
     });
     if (!user) return sendError(res, 'User not found', 404);
@@ -513,7 +516,11 @@ const myProfile = async (req, res) => {
       where: { userId: uid, status: 'pending' },
     });
 
-    sendSuccess(res, { profile: user, hasPendingIdCardRequest: !!pendingIdCard });
+    const authProvider = user.firebaseUid && !user.passwordHash ? 'google' : 'email';
+    const { firebaseUid, passwordHash, profilePhoto, ...profileData } = user;
+    const profile = { ...profileData, authProvider, photoUrl: profilePhoto || null };
+
+    sendSuccess(res, { profile, hasPendingIdCardRequest: !!pendingIdCard });
   } catch (error) {
     sendError(res, error.message);
   }
@@ -639,7 +646,7 @@ let user = await prisma.user.findUnique({
         tokenVersion: true, year: true, branch: true, rollNumber: true,
         studentIdCardUrl: true, department: true, teacherId: true,
         teacherIdCardUrl: true, employeeId: true, designation: true,
-        experience: true,profilePhoto: true,
+        experience: true,profilePhoto: true, passwordHash: true,
       },
     });
 
@@ -716,6 +723,8 @@ return tx.user.create({
 
     logger.info('[Auth] Firebase Google login', { uid: user.id, email, isNewUser });
 
+const authProvider = user.firebaseUid && !user.passwordHash ? 'google' : 'email';
+
 sendSuccess(res, {
       message: 'Authentication successful',
       uid: user.id,
@@ -743,6 +752,7 @@ sendSuccess(res, {
         experience: user.experience || null,
     photoUrl: user.profilePhoto || null,
         isNewUser,
+        authProvider,
       },
     });
   } catch (error) {
