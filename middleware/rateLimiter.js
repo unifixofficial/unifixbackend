@@ -63,4 +63,13 @@ const otpLimiter = rateLimit({
 //   message: { error: 'Too many lost reports submitted. Please wait 24 hours.' },
 // });
 
-module.exports = { generalLimiter, authLimiter, otpLimiter};
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  keyGenerator: ipKeyGenerator,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many refresh attempts. Please try again later.' },
+});
+
+module.exports = { generalLimiter, authLimiter, otpLimiter, refreshLimiter };

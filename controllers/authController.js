@@ -160,17 +160,24 @@ const validateResetOtp = async (req, res) => {
     const { email, otp } = req.body;
     if (!email || !otp) return sendError(res, 'Missing required fields', 400);
 
-    const isValid = await verifyOTP(email, otp, 'password-reset');
-    if (!isValid) return sendError(res, 'Invalid or expired OTP', 400);
+    const record = await prisma.otp.findUnique({
+      where: { email_type: { email, type: 'password-reset' } },
+    });
 
-    await storeOTP(email, otp, 'password-reset');
+    if (
+      !record ||
+      record.used ||
+      String(record.otp).trim() !== String(otp).trim() ||
+      new Date() > record.expiresAt
+    ) {
+      return sendError(res, 'Invalid or expired OTP', 400);
+    }
 
     sendSuccess(res, { message: 'OTP is valid' });
   } catch (error) {
     sendError(res, error.message);
   }
 };
-
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;

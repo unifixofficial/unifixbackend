@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const verifyToken = require('../middleware/verifyToken');
 const validate = require('../middleware/validate');
-const { authLimiter, otpLimiter } = require('../middleware/rateLimiter');
+const { authLimiter, otpLimiter, refreshLimiter } = require('../middleware/rateLimiter');
 const {
   signupSchema, loginSchema, verifyOtpSchema,
   forgotPasswordSchema, verifyResetOtpSchema,
@@ -37,7 +37,7 @@ router.post('/request-idcard-update', verifyToken, requestIdCardUpdate);
 router.get('/my-profile', verifyToken, myProfile);
 router.post('/save-push-token', verifyToken, validate(savePushTokenSchema), savePushToken);
 router.post('/report-ragging', verifyToken, validate(raggingSchema), reportRagging);
-router.post('/refresh', refreshToken);
+router.post('/refresh', refreshLimiter, refreshToken);
 router.post('/notify-staff-signup', verifyToken, notifyStaffSignup);
 router.post('/firebase', authLimiter, validate(firebaseAuthSchema), firebaseAuth);
 router.post('/select-role', verifyToken, validate(selectRoleSchema), selectRole);
