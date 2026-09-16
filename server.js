@@ -18,7 +18,7 @@ require('./workers/cleanupWorker');
 
 const app = express();
 app.use(cors({
-  origin: ['https://unifix-admin.onrender.com', 'https://unifix-app.onrender.com', 'http://localhost:5173', 'http://localhost:5174', ],
+  origin: ['https://unifix-admin.onrender.com', 'https://unifix-app.onrender.com', 'http://localhost:5173', 'http://localhost:5174',  'https://unifixapp.onrender.com'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret', 'x-platform'],
 }));
