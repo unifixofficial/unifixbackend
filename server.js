@@ -20,7 +20,7 @@ const app = express();
 app.use(cors({
   origin: ['https://unifix-admin.onrender.com', 'https://unifix-app.onrender.com', 'http://localhost:5173', 'http://localhost:5174', ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret', 'x-platform'],
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
